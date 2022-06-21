@@ -1,5 +1,5 @@
 project: qsim
-target: qsim
+target: qsim-base
 
 cmds:
   - cmd: /qsim/bazel-bin/apps/qsim_base -c @@
