@@ -1,5 +1,5 @@
-# Base OS
-FROM debian
+# Base OS 
+FROM debian as builder
 
 # Install baseline
 RUN apt-get update
@@ -16,3 +16,11 @@ COPY . /qsim
 WORKDIR /qsim/
 
 RUN bazel build //apps:qsim_base
+RUN mkdir -p /deps
+RUN ldd /qsim/bazel-bin/apps/qsim_base | tr -s '[:blank:]' '\n' | grep '^/' | xargs -I % sh -c 'cp % /deps;'
+
+FROM debian as package
+
+COPY --from=builder /deps /deps
+COPY --from=builder /qsim/bazel-bin/apps/qsim_base /qsim/bazel-bin/apps/qsim_base
+ENV LD_LIBRARY_PATH=/deps
