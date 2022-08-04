@@ -15,7 +15,6 @@
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
-from xml.etree.ElementPath import ops
 
 import cirq
 
@@ -23,68 +22,6 @@ import numpy as np
 
 from . import qsim, qsim_gpu, qsim_custatevec
 import qsimcirq.qsim_circuit as qsimc
-
-
-class QSimSimulatorState(cirq.StateVectorSimulatorState):
-    def __init__(self, qsim_data: np.ndarray, qubit_map: Dict[cirq.Qid, int]):
-        state_vector = qsim_data.view(np.complex64)
-        super().__init__(state_vector=state_vector, qubit_map=qubit_map)
-
-
-@cirq.value_equality(unhashable=True)
-class QSimSimulatorTrialResult(cirq.StateVectorMixin, cirq.SimulationTrialResult):
-    def __init__(
-        self,
-        params: cirq.ParamResolver,
-        measurements: Dict[str, np.ndarray],
-        final_simulator_state: QSimSimulatorState,
-    ):
-        super().__init__(
-            params=params,
-            measurements=measurements,
-            final_simulator_state=final_simulator_state,
-        )
-
-    # The following methods are (temporarily) copied here from
-    # cirq.StateVectorTrialResult due to incompatibility with the
-    # intermediate state simulation support which that class requires.
-    # TODO: remove these methods once inheritance is restored.
-
-    @property
-    def final_state_vector(self):
-        return self._final_simulator_state.state_vector
-
-    def state_vector(self):
-        """Return the state vector at the end of the computation."""
-        return self._final_simulator_state.state_vector.copy()
-
-    def _value_equality_values_(self):
-        measurements = {k: v.tolist() for k, v in sorted(self.measurements.items())}
-        return (self.params, measurements, self._final_simulator_state)
-
-    def __str__(self) -> str:
-        samples = super().__str__()
-        final = self.state_vector()
-        if len([1 for e in final if abs(e) > 0.001]) < 16:
-            state_vector = self.dirac_notation(3)
-        else:
-            state_vector = str(final)
-        return f"measurements: {samples}\noutput vector: {state_vector}"
-
-    def _repr_pretty_(self, p: Any, cycle: bool) -> None:
-        """Text output in Jupyter."""
-        if cycle:
-            # There should never be a cycle.  This is just in case.
-            p.text("StateVectorTrialResult(...)")
-        else:
-            p.text(str(self))
-
-    def __repr__(self) -> str:
-        return (
-            f"cirq.StateVectorTrialResult(params={self.params!r}, "
-            f"measurements={self.measurements!r}, "
-            f"final_simulator_state={self._final_simulator_state!r})"
-        )
 
 
 # This should probably live in Cirq...
@@ -168,10 +105,29 @@ class QSimOptions:
         }
 
 
+@dataclass
+class MeasInfo:
+    """Info about each measure operation in the circuit being simulated.
+
+    Attributes:
+        key: The measurement key.
+        idx: The "instance" of a possibly-repeated measurement key.
+        invert_mask: True for any measurement bits that should be inverted.
+        start: Start index in qsim's output array for this measurement.
+        end: End index (non-inclusive) in qsim's output array.
+    """
+
+    key: str
+    idx: int
+    invert_mask: Tuple[bool, ...]
+    start: int
+    end: int
+
+
 class QSimSimulator(
     cirq.SimulatesSamples,
     cirq.SimulatesAmplitudes,
-    cirq.SimulatesFinalState,
+    cirq.SimulatesFinalState[cirq.StateVectorTrialResult],
     cirq.SimulatesExpectationValues,
 ):
     def __init__(
@@ -313,40 +269,54 @@ class QSimSimulator(
 
         qubit_map = {qubit: index for index, qubit in enumerate(ordered_qubits)}
 
-        # Computes
-        # - the list of qubits to be measured
-        # - the start (inclusive) and end (exclusive) indices of each measurement
-        # - a mapping from measurement key to measurement gate
+        # Compute:
+        # - number of qubits for each measurement key.
+        # - measurement ops for each measurement key.
+        # - measurement info for each measurement.
+        # - total number of measured bits.
         measurement_ops = [
             op
             for _, op, _ in program.findall_operations_with_gate_type(
                 cirq.MeasurementGate
             )
         ]
-        measured_qubits: List[cirq.Qid] = []
-        bounds: Dict[str, Tuple] = {}
+        num_qubits_by_key: Dict[str, int] = {}
         meas_ops: Dict[str, List[cirq.GateOperation]] = {}
-        current_index = 0
+        meas_infos: List[MeasInfo] = []
+        num_bits = 0
         for op in measurement_ops:
             gate = op.gate
             key = cirq.measurement_key_name(gate)
             meas_ops.setdefault(key, [])
+            i = len(meas_ops[key])
             meas_ops[key].append(op)
-            if key in bounds:
-                raise ValueError(f"Duplicate MeasurementGate with key {key}")
-            bounds[key] = (current_index, current_index + len(op.qubits))
-            measured_qubits.extend(op.qubits)
-            current_index += len(op.qubits)
+            n = len(op.qubits)
+            if key in num_qubits_by_key:
+                if n != num_qubits_by_key[key]:
+                    raise ValueError(
+                        f"repeated key {key!r} with different numbers of qubits: "
+                        f"{num_qubits_by_key[key]} != {n}"
+                    )
+            else:
+                num_qubits_by_key[key] = n
+            meas_infos.append(
+                MeasInfo(
+                    key=key,
+                    idx=i,
+                    invert_mask=gate.full_invert_mask(),
+                    start=num_bits,
+                    end=num_bits + n,
+                )
+            )
+            num_bits += n
 
         # Set qsim options
-        options = {}
-        options.update(self.qsim_options)
+        options = {**self.qsim_options}
 
-        results = {}
-        for key, bound in bounds.items():
-            results[key] = np.ndarray(
-                shape=(repetitions, len(meas_ops[key]), bound[1] - bound[0]), dtype=int
-            )
+        results = {
+            key: np.ndarray(shape=(repetitions, len(meas_ops[key]), n), dtype=int)
+            for key, n in num_qubits_by_key.items()
+        }
 
         noisy = _needs_trajectories(program)
         if not noisy and program.are_all_measurements_terminal() and repetitions > 1:
@@ -394,35 +364,25 @@ class QSimSimulator(
                 translator_fn_name,
                 cirq.QubitOrder.DEFAULT,
             )
-            measurements = np.empty(
-                shape=(
-                    repetitions,
-                    sum(
-                        cirq.num_qubits(op)
-                        for oplist in meas_ops.values()
-                        for op in oplist
-                    ),
-                ),
-                dtype=int,
-            )
+            measurements = np.empty(shape=(repetitions, num_bits), dtype=int)
             for i in range(repetitions):
                 options["s"] = self.get_seed()
                 measurements[i] = sampler_fn(options)
 
-            for key, (start, end) in bounds.items():
-                for i, op in enumerate(meas_ops[key]):
-                    invert_mask = op.gate.full_invert_mask()
-                    results[key][:, i, :] = measurements[:, start:end] ^ invert_mask
+            for m in meas_infos:
+                results[m.key][:, m.idx, :] = (
+                    measurements[:, m.start : m.end] ^ m.invert_mask
+                )
 
         return results
 
-    def compute_amplitudes_sweep(
+    def compute_amplitudes_sweep_iter(
         self,
         program: cirq.Circuit,
         bitstrings: Sequence[int],
         params: cirq.Sweepable,
         qubit_order: cirq.QubitOrderOrList = cirq.QubitOrder.DEFAULT,
-    ) -> Sequence[Sequence[complex]]:
+    ) -> Iterator[Sequence[complex]]:
         """Computes the desired amplitudes using qsim.
 
         The initial state is assumed to be the all zeros state.
@@ -438,8 +398,8 @@ class QSimSimulator(
               often used in specifying the initial state, i.e. the ordering of the
               computational basis states.
 
-        Returns:
-            List of amplitudes.
+        Yields:
+            Amplitudes.
         """
 
         # Add noise to the circuit if a noise model was provided.
@@ -462,7 +422,6 @@ class QSimSimulator(
 
         param_resolvers = cirq.to_resolvers(params)
 
-        trials_results = []
         if _needs_trajectories(program):
             translator_fn_name = "translate_cirq_to_qtrajectory"
             simulator_fn = self._sim_module.qtrajectory_simulate
@@ -478,18 +437,15 @@ class QSimSimulator(
                 cirq_order,
             )
             options["s"] = self.get_seed()
-            amplitudes = simulator_fn(options)
-            trials_results.append(amplitudes)
+            yield simulator_fn(options)
 
-        return trials_results
-
-    def simulate_sweep(
+    def simulate_sweep_iter(
         self,
         program: cirq.Circuit,
         params: cirq.Sweepable,
         qubit_order: cirq.QubitOrderOrList = cirq.QubitOrder.DEFAULT,
         initial_state: Optional[Union[int, np.ndarray]] = None,
-    ) -> List["SimulationTrialResult"]:
+    ) -> Iterator[cirq.StateVectorTrialResult]:
         """Simulates the supplied Circuit.
 
         This method returns a result which allows access to the entire
@@ -550,7 +506,6 @@ class QSimSimulator(
                     f"Expected: {2**num_qubits * 2} Received: {len(input_vector)}"
                 )
 
-        trials_results = []
         if _needs_trajectories(program):
             translator_fn_name = "translate_cirq_to_qtrajectory"
             fullstate_simulator_fn = self._sim_module.qtrajectory_simulate_fullstate
@@ -567,7 +522,6 @@ class QSimSimulator(
                 cirq_order,
             )
             options["s"] = self.get_seed()
-            qubit_map = {qubit: index for index, qubit in enumerate(qsim_order)}
 
             if isinstance(initial_state, int):
                 qsim_state = fullstate_simulator_fn(options, initial_state)
@@ -575,17 +529,17 @@ class QSimSimulator(
                 qsim_state = fullstate_simulator_fn(options, input_vector)
             assert qsim_state.dtype == np.float32
             assert qsim_state.ndim == 1
-            final_state = QSimSimulatorState(qsim_state, qubit_map)
+
+            final_state = cirq.StateVectorSimulationState(
+                initial_state=qsim_state.view(np.complex64), qubits=cirq_order
+            )
             # create result for this parameter
             # TODO: We need to support measurements.
-            result = QSimSimulatorTrialResult(
+            yield cirq.StateVectorTrialResult(
                 params=prs, measurements={}, final_simulator_state=final_state
             )
-            trials_results.append(result)
 
-        return trials_results
-
-    def simulate_expectation_values_sweep(
+    def simulate_expectation_values_sweep_iter(
         self,
         program: cirq.Circuit,
         observables: Union[cirq.PauliSumLike, List[cirq.PauliSumLike]],
@@ -593,7 +547,7 @@ class QSimSimulator(
         qubit_order: cirq.QubitOrderOrList = cirq.QubitOrder.DEFAULT,
         initial_state: Any = None,
         permit_terminal_measurements: bool = False,
-    ) -> List[List[float]]:
+    ) -> Iterator[List[float]]:
         """Simulates the supplied circuit and calculates exact expectation
         values for the given observables on its final state.
 
@@ -616,8 +570,8 @@ class QSimSimulator(
                 is set to True. This is meant to prevent measurements from
                 ruining expectation value calculations.
 
-        Returns:
-            A list of expectation values, with the value at index `n`
+        Yields:
+            Lists of expectation values, with the value at index `n`
             corresponding to `observables[n]` from the input.
 
         Raises:
@@ -681,7 +635,6 @@ class QSimSimulator(
                     f"Expected: {2**num_qubits * 2} Received: {len(input_vector)}"
                 )
 
-        results = []
         if _needs_trajectories(program):
             translator_fn_name = "translate_cirq_to_qtrajectory"
             ev_simulator_fn = self._sim_module.qtrajectory_simulate_expectation_values
@@ -702,9 +655,7 @@ class QSimSimulator(
                 evs = ev_simulator_fn(options, opsums_and_qubit_counts, initial_state)
             elif isinstance(initial_state, np.ndarray):
                 evs = ev_simulator_fn(options, opsums_and_qubit_counts, input_vector)
-            results.append(evs)
-
-        return results
+            yield evs
 
     def simulate_moment_expectation_values(
         self,
@@ -848,20 +799,13 @@ class QSimSimulator(
         translator_fn_name: str,
         qubit_order: cirq.QubitOrderOrList,
     ):
-        # If the circuit is memoized, reuse the corresponding translated
-        # circuit.
-        translated_circuit = None
-        for original, translated, m_indices in self._translated_circuits:
+        # If the circuit is memoized, reuse the corresponding translated circuit.
+        for original, translated, moment_indices in self._translated_circuits:
             if original == circuit:
-                translated_circuit = translated
-                moment_indices = m_indices
-                break
+                return translated, moment_indices
 
-        if translated_circuit is None:
-            translator_fn = getattr(circuit, translator_fn_name)
-            translated_circuit, moment_indices = translator_fn(qubit_order)
-            self._translated_circuits.append(
-                (circuit, translated_circuit, moment_indices)
-            )
+        translator_fn = getattr(circuit, translator_fn_name)
+        translated, moment_indices = translator_fn(qubit_order)
+        self._translated_circuits.append((circuit, translated, moment_indices))
 
-        return translated_circuit, moment_indices
+        return translated, moment_indices

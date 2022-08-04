@@ -57,6 +57,49 @@ def test_empty_moment(mode: str):
     assert result.final_state_vector.shape == (4,)
 
 
+def test_repeated_keys():
+    q0, q1 = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(
+        cirq.Moment(cirq.measure(q0, key="m")),
+        cirq.Moment(cirq.X(q1)),
+        cirq.Moment(cirq.measure(q1, key="m")),
+        cirq.Moment(cirq.X(q0)),
+        cirq.Moment(cirq.measure(q0, key="m")),
+        cirq.Moment(cirq.X(q1)),
+        cirq.Moment(cirq.measure(q1, key="m")),
+    )
+    result = qsimcirq.QSimSimulator().run(circuit, repetitions=10)
+    assert result.records["m"].shape == (10, 4, 1)
+    assert np.all(result.records["m"][:, 0, :] == 0)
+    assert np.all(result.records["m"][:, 1, :] == 1)
+    assert np.all(result.records["m"][:, 2, :] == 1)
+    assert np.all(result.records["m"][:, 3, :] == 0)
+
+
+def test_repeated_keys_same_moment():
+    q0, q1 = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(
+        cirq.Moment(cirq.X(q1)),
+        cirq.Moment(cirq.measure(q0, key="m"), cirq.measure(q1, key="m")),
+    )
+    result = qsimcirq.QSimSimulator().run(circuit, repetitions=10)
+    assert result.records["m"].shape == (10, 2, 1)
+    assert np.all(result.records["m"][:, 0, :] == 0)
+    assert np.all(result.records["m"][:, 1, :] == 1)
+
+
+def test_repeated_keys_different_numbers_of_qubits():
+    q0, q1 = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(
+        cirq.measure(q0, key="m"),
+        cirq.measure(q0, q1, key="m"),
+    )
+    with pytest.raises(
+        ValueError, match="repeated key 'm' with different numbers of qubits"
+    ):
+        _ = qsimcirq.QSimSimulator().run(circuit, repetitions=10)
+
+
 def test_cirq_too_big_gate():
     # Pick qubits.
     a, b, c, d, e, f, g = [
@@ -112,6 +155,31 @@ def test_cirq_giant_identity():
     assert qsimSim.simulate(cirq_circuit) == qsimSim.simulate(
         no_id_circuit, qubit_order=[a, b, c, d, e, f, g, h]
     )
+
+
+def test_noise_alongside_multistep_decompose():
+    class CustomZGate(cirq.Gate):
+        """Implements Z as HXH."""
+
+        def _num_qubits_(self):
+            return 1
+
+        def _decompose_(self, qubits):
+            return [cirq.H(qubits[0]), cirq.X(qubits[0]), cirq.H(qubits[0])]
+
+    # Simultaneous decomposing gate (CCNOT) and noise.
+    qubits = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(
+        CustomZGate().on(qubits[0]),
+        cirq.bit_flip(p=0.5).on(qubits[1]),
+        cirq.measure(*qubits, key="m"),
+    )
+    qsim_sim = qsimcirq.QSimSimulator()
+    # Only need to verify that this succeeds, not precision of results.
+    result = qsim_sim.run(circuit, repetitions=100)
+    result_hist = result.histogram(key="m")
+    assert result_hist[0] > 0
+    assert result_hist[1] > 0
 
 
 @pytest.mark.parametrize("mode", ["noiseless", "noisy"])
@@ -771,9 +839,10 @@ def test_control_values():
         cirq.X(qubits[2]).controlled_by(*qubits[:2], control_values=[1, 2]),
     )
     qsimSim = qsimcirq.QSimSimulator()
-    with pytest.warns(RuntimeWarning, match="Gate has no valid control value"):
-        result = qsimSim.simulate(cirq_circuit, qubit_order=qubits)
-    assert result.state_vector()[0] == 1
+    with pytest.raises(
+        ValueError, match="Cannot translate control values other than 0 and 1"
+    ):
+        _ = qsimSim.simulate(cirq_circuit, qubit_order=qubits)
 
 
 def test_control_limits():
@@ -1591,7 +1660,7 @@ def test_cirq_qsim_all_supported_gates():
     qsim_result = qsim_simulator.simulate(circuit)
 
     assert cirq.linalg.allclose_up_to_global_phase(
-        qsim_result.state_vector(), cirq_result.state_vector()
+        qsim_result.state_vector(), cirq_result.state_vector(), atol=1e-5
     )
 
 
