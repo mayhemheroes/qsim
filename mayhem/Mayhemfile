@@ -1,7 +1,7 @@
 project: qsim
-target: qsim-base
+target: fuzz-expand-bits
 
 cmds:
-  - cmd: /qsim/bazel-bin/apps/qsim_base -c @@
-    env:
-      DISABLE_SMOKETEST: '1'
+  - cmd: /fuzz_expand_bits
+    libfuzzer: true
+    max_length: 100

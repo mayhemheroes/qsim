@@ -3,7 +3,7 @@ FROM debian as builder
 
 # Install baseline
 RUN apt-get update
-RUN apt-get install -y g++ make wget
+RUN apt-get install -y g++ make wget clang
 
 RUN apt install -y apt-transport-https curl gnupg
 RUN curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
@@ -14,13 +14,8 @@ RUN apt update && apt install -y bazel
 COPY . /qsim
 
 WORKDIR /qsim/
-
-RUN bazel build //apps:qsim_base
-RUN mkdir -p /deps
-RUN ldd /qsim/bazel-bin/apps/qsim_base | tr -s '[:blank:]' '\n' | grep '^/' | xargs -I % sh -c 'cp % /deps;'
+RUN clang mayhem/fuzz_expand_bits.cpp -fsanitize=fuzzer,address -o /fuzz
 
 FROM debian as package
 
-COPY --from=builder /deps /deps
-COPY --from=builder /qsim/bazel-bin/apps/qsim_base /qsim/bazel-bin/apps/qsim_base
-ENV LD_LIBRARY_PATH=/deps
+COPY --from=builder /fuzz /fuzz_expand_bits
