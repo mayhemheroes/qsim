@@ -15,7 +15,10 @@ COPY . /qsim
 
 WORKDIR /qsim/
 RUN clang mayhem/fuzz_expand_bits.cpp -fsanitize=fuzzer,address -o /fuzz
+RUN bazel build //apps:qsim_base
 
 FROM debian as package
 
 COPY --from=builder /fuzz /fuzz_expand_bits
+COPY --from=builder /qsim/bazel-bin/apps/qsim_base /qsim/bazel-bin/apps/qsim_base
+ENV LD_LIBRARY_PATH=/deps
