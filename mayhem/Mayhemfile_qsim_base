@@ -1,5 +1,7 @@
 project: qsim
 target: qsim-base
+testsuite:
+  - file://mayhem/corpus.txt
 
 cmds:
   - cmd: /qsim/bazel-bin/apps/qsim_base -c @@
