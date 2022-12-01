@@ -7,4 +7,3 @@ cmds:
   - cmd: /qsim/bazel-bin/apps/qsim_base -c @@
     env:
       DISABLE_SMOKETEST: '1'
-image: ghcr.io/rnshah9/playground:qsim
