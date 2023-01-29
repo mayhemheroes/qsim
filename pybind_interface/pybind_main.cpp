@@ -233,6 +233,9 @@ Cirq::GateCirq<float> create_matrix_gate(const unsigned time,
                                          const std::vector<unsigned>& qubits,
                                          const std::vector<float>& matrix) {
   switch (qubits.size()) {
+  case 0:
+    // Global phase gate.
+    return Cirq::GlobalPhaseGate<float>::Create(time, matrix[0], matrix[1]);
   case 1:
     return Cirq::MatrixGate1<float>::Create(time, qubits[0], matrix);
   case 2:
@@ -691,15 +694,11 @@ class SimulatorHelper {
 
   void init_state(const py::array_t<float> &input_vector) {
     StateSpace state_space = factory.CreateStateSpace();
-    if (state.num_qubits() >= 5) {
-      state_space.Copy(input_vector.data(), state);
-    } else {
+    uint64_t size = 2 * (uint64_t{1} << state.num_qubits());
+    if (size < state_space.MinSize(state.num_qubits())) {
       state_space.SetAllZeros(state);
-      uint64_t size = 2 * (uint64_t{1} << state.num_qubits());
-      for (uint64_t i = 0; i < size; ++i) {
-        state.get()[i] = input_vector.data()[i];
-      }
     }
+    state_space.Copy(input_vector.data(), size, state);
     state_space.NormalToInternalOrder(state);
   }
 

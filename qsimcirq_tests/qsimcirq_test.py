@@ -1262,6 +1262,27 @@ def test_cirq_qsimh_simulate():
     assert np.allclose(result, [0j, 0j, (1 + 0j), 0j])
 
 
+def test_qsim_input_state():
+    for num_qubits in range(1, 8):
+        size = 2**num_qubits
+        qubits = cirq.LineQubit.range(num_qubits)
+        circuit = cirq.Circuit()
+
+        for k in range(num_qubits):
+            circuit.append(cirq.H(qubits[k]))
+
+        qsimSim = qsimcirq.QSimSimulator()
+        initial_state = np.asarray([np.sqrt(1.0 / size)] * size, dtype=np.complex64)
+        result = qsimSim.simulate(circuit, initial_state=initial_state)
+        state_vector = result.state_vector()
+
+        assert result.state_vector().shape == (size,)
+        assert cirq.approx_eq(state_vector[0], 1, atol=1e-6)
+
+        for i in range(1, size):
+            assert cirq.approx_eq(state_vector[i], 0, atol=1e-6)
+
+
 def test_qsim_gpu_unavailable():
     if qsimcirq.qsim_gpu is not None:
         pytest.skip("GPU is available; skipping test.")
@@ -1358,6 +1379,32 @@ def test_cirq_qsim_gpu_input_state():
     )
 
 
+def test_qsim_gpu_input_state():
+    if qsimcirq.qsim_gpu is None:
+        pytest.skip("GPU is not available for testing.")
+
+    for num_qubits in range(1, 8):
+        size = 2**num_qubits
+        qubits = cirq.LineQubit.range(num_qubits)
+        circuit = cirq.Circuit()
+
+        for k in range(num_qubits):
+            circuit.append(cirq.H(qubits[k]))
+
+        # Enable GPU acceleration.
+        gpu_options = qsimcirq.QSimOptions(use_gpu=True)
+        qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=gpu_options)
+        initial_state = np.asarray([np.sqrt(1.0 / size)] * size, dtype=np.complex64)
+        result = qsimGpuSim.simulate(circuit, initial_state=initial_state)
+        state_vector = result.state_vector()
+
+        assert result.state_vector().shape == (size,)
+        assert cirq.approx_eq(state_vector[0], 1, atol=1e-6)
+
+        for i in range(1, size):
+            assert cirq.approx_eq(state_vector[i], 0, atol=1e-6)
+
+
 def test_cirq_qsim_custatevec_amplitudes():
     if qsimcirq.qsim_custatevec is None:
         pytest.skip("cuStateVec library is not available for testing.")
@@ -1368,7 +1415,7 @@ def test_cirq_qsim_custatevec_amplitudes():
     cirq_circuit = cirq.Circuit(cirq.CNOT(a, b), cirq.CNOT(b, a), cirq.X(a))
 
     # Enable GPU acceleration.
-    custatevec_options = qsimcirq.QSimOptions(gpu_mode=1)
+    custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
     qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
     result = qsimGpuSim.compute_amplitudes(
         cirq_circuit, bitstrings=[0b00, 0b01, 0b10, 0b11]
@@ -1386,7 +1433,7 @@ def test_cirq_qsim_custatevec_simulate():
     cirq_circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.X(b))
 
     # Enable GPU acceleration.
-    custatevec_options = qsimcirq.QSimOptions(gpu_mode=1)
+    custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
     qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
     result = qsimGpuSim.simulate(cirq_circuit)
     assert result.state_vector().shape == (4,)
@@ -1409,7 +1456,7 @@ def test_cirq_qsim_custatevec_expectation_values():
     obs = [cirq.Z(a) * cirq.Z(b)]
 
     # Enable GPU acceleration.
-    custatevec_options = qsimcirq.QSimOptions(gpu_mode=1)
+    custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
     qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
     result = qsimGpuSim.simulate_expectation_values(cirq_circuit, obs)
 
@@ -1428,7 +1475,7 @@ def test_cirq_qsim_custatevec_input_state():
     cirq_circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.X(b))
 
     # Enable GPU acceleration.
-    custatevec_options = qsimcirq.QSimOptions(gpu_mode=1)
+    custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
     qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
     initial_state = np.asarray([0.5] * 4, dtype=np.complex64)
     result = qsimGpuSim.simulate(cirq_circuit, initial_state=initial_state)
@@ -1439,6 +1486,32 @@ def test_cirq_qsim_custatevec_input_state():
     assert cirq.linalg.allclose_up_to_global_phase(
         result.state_vector(), cirq_result.state_vector(), atol=1.0e-6
     )
+
+
+def test_qsim_custatevec_input_state():
+    if qsimcirq.qsim_custatevec is None:
+        pytest.skip("cuStateVec library is not available for testing.")
+
+    for num_qubits in range(1, 8):
+        size = 2**num_qubits
+        qubits = cirq.LineQubit.range(num_qubits)
+        circuit = cirq.Circuit()
+
+        for k in range(num_qubits):
+            circuit.append(cirq.H(qubits[k]))
+
+        # Enable GPU acceleration.
+        custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
+        qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
+        initial_state = np.asarray([np.sqrt(1.0 / size)] * size, dtype=np.complex64)
+        result = qsimGpuSim.simulate(circuit, initial_state=initial_state)
+        state_vector = result.state_vector()
+
+        assert result.state_vector().shape == (size,)
+        assert cirq.approx_eq(state_vector[0], 1, atol=1e-6)
+
+        for i in range(1, size):
+            assert cirq.approx_eq(state_vector[i], 0, atol=1e-6)
 
 
 def test_cirq_qsim_old_options():
@@ -1928,3 +2001,60 @@ def test_cirq_qsim_circuit_memoization_simulate_expectation_values_sweep(mode: s
             circuit, [psum1, psum2], params
         )
         assert cirq.approx_eq(qsim_result, cirq_result, atol=1e-6)
+
+
+def test_qsimcirq_identity_expectation_value():
+    objs = [(1.5, "II"), (-0.3, "IZ")]
+    num_qubits = 2
+    qubits = cirq.LineQubit.range(num_qubits)
+    cirq_circuit = cirq.Circuit(cirq.H(qubits[0]), cirq.CNOT(qubits[0], qubits[1]))
+
+    hamiltonian = 0
+    for w, pauli in objs:
+        pauli = pauli[::-1]
+        hamiltonian += float(w) * cirq.PauliString(
+            cirq.I(cirq.LineQubit(i))
+            if p == "I"
+            else cirq.Z(cirq.LineQubit(i))
+            if p == "Z"
+            else None
+            for i, p in enumerate(pauli)
+        )
+
+    qsimSim = qsimcirq.QSimSimulator()
+    qsimcirq_result = qsimSim.simulate_expectation_values(cirq_circuit, hamiltonian)
+    cirqSim = cirq.Simulator()
+    cirq_result = cirqSim.simulate_expectation_values(cirq_circuit, hamiltonian)
+    assert cirq.approx_eq(qsimcirq_result, cirq_result, atol=1e-6)
+
+
+def test_cirq_global_phase_gate():
+    qsim_sim = qsimcirq.QSimSimulator()
+    cirq_sim = cirq.Simulator()
+
+    a, b, c = [cirq.LineQubit(0), cirq.LineQubit(1), cirq.LineQubit(2)]
+
+    circuit = cirq.Circuit(
+        [
+            cirq.Moment(
+                [
+                    cirq.H(a),
+                    cirq.H(b),
+                    cirq.H(c),
+                    cirq.global_phase_operation(np.exp(0.4j * np.pi)),
+                ]
+            ),
+            cirq.Moment(
+                [
+                    cirq.global_phase_operation(np.exp(0.7j * np.pi)).controlled_by(a),
+                ]
+            ),
+        ]
+    )
+
+    cirq_result = cirq_sim.simulate(circuit)
+    qsim_result = qsim_sim.simulate(circuit)
+
+    assert cirq.approx_eq(
+        qsim_result.state_vector(), cirq_result.state_vector(), atol=1e-6
+    )
