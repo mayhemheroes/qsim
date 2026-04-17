@@ -1,10 +1,21 @@
-package(default_visibility = ["//visibility:public"])
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# Libraries of the following form:
-#   # cuda_library
-#   cc_library(...)
-# are converted to cuda_library rules when imported to the Google codebase.
-# Do not modify this tag.
+load("@local_config_cuda//cuda:build_defs.bzl", "cuda_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
 
 ##### Aggregate libraries #####
 
@@ -16,9 +27,9 @@ cc_library(
         "bitstring.h",
         "channel.h",
         "channels_cirq.h",
+        "circuit.h",
         "circuit_noisy.h",
         "circuit_qsim_parser.h",
-        "circuit.h",
         "expect.h",
         "formux.h",
         "fuser.h",
@@ -29,8 +40,8 @@ cc_library(
         "gates_cirq.h",
         "gates_qsim.h",
         "hybrid.h",
-        "io_file.h",
         "io.h",
+        "io_file.h",
         "matrix.h",
         "mps_simulator.h",
         "mps_statespace.h",
@@ -45,39 +56,52 @@ cc_library(
         "simulator_avx512.h",
         "simulator_basic.h",
         "simulator_sse.h",
+        "statespace.h",
         "statespace_avx.h",
         "statespace_avx512.h",
         "statespace_basic.h",
         "statespace_sse.h",
-        "statespace.h",
         "umux.h",
+        "unitary_calculator_avx.h",
+        "unitary_calculator_avx512.h",
+        "unitary_calculator_basic.h",
+        "unitary_calculator_sse.h",
         "unitaryspace.h",
         "unitaryspace_avx.h",
         "unitaryspace_avx512.h",
         "unitaryspace_basic.h",
         "unitaryspace_sse.h",
-        "unitary_calculator_avx.h",
-        "unitary_calculator_avx512.h",
-        "unitary_calculator_basic.h",
-        "unitary_calculator_sse.h",
         "util.h",
         "util_cpu.h",
         "vectorspace.h",
     ],
 )
 
-# Full qsim library, including CUDA
-# cuda_library
 cc_library(
+    name = "cuda",
+    data = [
+        "@local_config_cuda//cuda:cudart",
+    ],
+    linkopts = [
+        "-Wl,-rpath,../local_config_cuda/cuda/lib64",
+        "-Wl,-rpath,../local_config_cuda/cuda/extras/CUPTI/lib64",
+    ],
+    deps = [
+        "@local_config_cuda//cuda:cudart",
+    ],
+)
+
+# Full qsim library, including CUDA
+cuda_library(
     name = "qsim_cuda_lib",
     hdrs = [
         "bits.h",
         "bitstring.h",
         "channel.h",
         "channels_cirq.h",
+        "circuit.h",
         "circuit_noisy.h",
         "circuit_qsim_parser.h",
-        "circuit.h",
         "expect.h",
         "formux.h",
         "fuser.h",
@@ -88,8 +112,8 @@ cc_library(
         "gates_cirq.h",
         "gates_qsim.h",
         "hybrid.h",
-        "io_file.h",
         "io.h",
+        "io_file.h",
         "matrix.h",
         "mps_simulator.h",
         "mps_statespace.h",
@@ -99,35 +123,117 @@ cc_library(
         "run_qsimh.h",
         "seqfor.h",
         "simmux.h",
+        "simmux_gpu.h",
         "simulator.h",
         "simulator_avx.h",
         "simulator_avx512.h",
         "simulator_basic.h",
-        "simulator_sse.h",
         "simulator_cuda.h",
         "simulator_cuda_kernels.h",
+        "simulator_sse.h",
+        "statespace.h",
         "statespace_avx.h",
         "statespace_avx512.h",
         "statespace_basic.h",
-        "statespace_sse.h",
         "statespace_cuda.h",
         "statespace_cuda_kernels.h",
-        "statespace.h",
+        "statespace_sse.h",
         "umux.h",
+        "unitary_calculator_avx.h",
+        "unitary_calculator_avx512.h",
+        "unitary_calculator_basic.h",
+        "unitary_calculator_sse.h",
         "unitaryspace.h",
         "unitaryspace_avx.h",
         "unitaryspace_avx512.h",
         "unitaryspace_basic.h",
         "unitaryspace_sse.h",
-        "unitary_calculator_avx.h",
-        "unitary_calculator_avx512.h",
-        "unitary_calculator_basic.h",
-        "unitary_calculator_sse.h",
         "util.h",
         "util_cpu.h",
         "util_cuda.h",
         "vectorspace.h",
         "vectorspace_cuda.h",
+    ],
+    deps = [
+        ":cuda",
+        "@local_config_cuda//cuda:cuda_headers",
+    ],
+)
+
+# Full qsim library, including cuQuantum
+cuda_library(
+    name = "qsim_cuquantum_lib",
+    hdrs = [
+        "bits.h",
+        "bitstring.h",
+        "channel.h",
+        "channels_cirq.h",
+        "circuit.h",
+        "circuit_noisy.h",
+        "circuit_qsim_parser.h",
+        "expect.h",
+        "formux.h",
+        "fuser.h",
+        "fuser_basic.h",
+        "fuser_mqubit.h",
+        "gate.h",
+        "gate_appl.h",
+        "gates_cirq.h",
+        "gates_qsim.h",
+        "hybrid.h",
+        "io.h",
+        "io_file.h",
+        "matrix.h",
+        "mps_simulator.h",
+        "mps_statespace.h",
+        "multiprocess_custatevecex.h",
+        "parfor.h",
+        "qtrajectory.h",
+        "run_custatevecex.h",
+        "run_qsim.h",
+        "run_qsimh.h",
+        "seqfor.h",
+        "simmux.h",
+        "simmux_gpu.h",
+        "simulator.h",
+        "simulator_avx.h",
+        "simulator_avx512.h",
+        "simulator_basic.h",
+        "simulator_custatevec.h",
+        "simulator_custatevecex.h",
+        "simulator_sse.h",
+        "statespace.h",
+        "statespace_avx.h",
+        "statespace_avx512.h",
+        "statespace_basic.h",
+        "statespace_custatevec.h",
+        "statespace_custatevecex.h",
+        "statespace_sse.h",
+        "umux.h",
+        "unitary_calculator_avx.h",
+        "unitary_calculator_avx512.h",
+        "unitary_calculator_basic.h",
+        "unitary_calculator_sse.h",
+        "unitaryspace.h",
+        "unitaryspace_avx.h",
+        "unitaryspace_avx512.h",
+        "unitaryspace_basic.h",
+        "unitaryspace_sse.h",
+        "util.h",
+        "util_cpu.h",
+        "util_cuda.h",
+        "util_custatevec.h",
+        "util_custatevecex.h",
+        "vectorspace.h",
+        "vectorspace_cuda.h",
+        "vectorspace_custatevecex.h",
+    ],
+    copts = ["-D__CUSTATEVEC__"],
+    deps = [
+        ":cuda",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@local_config_cuquantum//:cuquantum_headers",
+        "@local_config_cuquantum//:libcuquantum",
     ],
 )
 
@@ -164,13 +270,13 @@ cc_library(
         "statespace_basic.h",
         "statespace_sse.h",
         "umux.h",
+        "unitary_calculator_avx.h",
+        "unitary_calculator_basic.h",
+        "unitary_calculator_sse.h",
         "unitaryspace.h",
         "unitaryspace_avx.h",
         "unitaryspace_basic.h",
         "unitaryspace_sse.h",
-        "unitary_calculator_avx.h",
-        "unitary_calculator_basic.h",
-        "unitary_calculator_sse.h",
         "util.h",
         "util_cpu.h",
         "vectorspace.h",
@@ -247,10 +353,19 @@ cc_library(
     hdrs = ["util_cpu.h"],
 )
 
-# cuda_library
-cc_library(
+cuda_library(
     name = "util_cuda",
     hdrs = ["util_cuda.h"],
+)
+
+cuda_library(
+    name = "util_custatevec",
+    hdrs = ["util_custatevec.h"],
+)
+
+cuda_library(
+    name = "util_custatevecex",
+    hdrs = ["util_custatevecex.h"],
 )
 
 ### Input/output libraries ###
@@ -386,6 +501,7 @@ cc_library(
     name = "run_qsim",
     hdrs = ["run_qsim.h"],
     deps = [
+        ":circuit",
         ":gate",
         ":gate_appl",
         ":util",
@@ -401,6 +517,29 @@ cc_library(
     ],
 )
 
+cuda_library(
+    name = "run_custatevecex",
+    hdrs = ["run_custatevecex.h"],
+    deps = [
+        ":circuit",
+        ":util",
+        ":util_custatevec",
+        ":util_custatevecex",
+    ],
+)
+
+### Multi-process library ###
+
+cuda_library(
+    name = "multiprocess_custatevecex",
+    hdrs = ["multiprocess_custatevecex.h"],
+    deps = [
+        ":io",
+        ":util_custatevec",
+        ":util_custatevecex",
+    ],
+)
+
 ### Vectorspace libraries ###
 
 cc_library(
@@ -408,10 +547,21 @@ cc_library(
     hdrs = ["vectorspace.h"],
 )
 
-# cuda_library
-cc_library(
+cuda_library(
     name = "vectorspace_cuda",
     hdrs = ["vectorspace_cuda.h"],
+)
+
+cuda_library(
+    name = "vectorspace_custatevecex",
+    hdrs = ["vectorspace_custatevecex.h"],
+    deps = [
+        "io",
+        ":multiprocess_custatevecex",
+        ":util_cuda",
+        ":util_custatevec",
+        ":util_custatevecex",
+    ],
 )
 
 ### Statespace libraries ###
@@ -462,8 +612,7 @@ cc_library(
     ],
 )
 
-# cuda_library
-cc_library(
+cuda_library(
     name = "statespace_cuda",
     hdrs = [
         "statespace_cuda.h",
@@ -473,6 +622,32 @@ cc_library(
         ":statespace",
         ":util_cuda",
         ":vectorspace_cuda",
+    ],
+)
+
+cuda_library(
+    name = "statespace_custatevec",
+    hdrs = [
+        "statespace_custatevec.h",
+    ],
+    deps = [
+        ":statespace",
+        ":util_custatevec",
+        ":vectorspace_cuda",
+    ],
+)
+
+cuda_library(
+    name = "statespace_custatevecex",
+    hdrs = [
+        "statespace_custatevecex.h",
+    ],
+    deps = [
+        ":multiprocess_custatevecex",
+        ":statespace",
+        ":util_custatevec",
+        ":util_custatevecex",
+        ":vectorspace_custatevecex",
     ],
 )
 
@@ -520,8 +695,7 @@ cc_library(
     ],
 )
 
-# cuda_library
-cc_library(
+cuda_library(
     name = "simulator_cuda",
     hdrs = [
         "simulator_cuda.h",
@@ -531,6 +705,31 @@ cc_library(
         ":bits",
         ":statespace_cuda",
         ":util_cuda",
+    ],
+)
+
+cuda_library(
+    name = "simulator_custatevec",
+    hdrs = [
+        "simulator_custatevec.h",
+    ],
+    deps = [
+        ":bits",
+        ":statespace_custatevec",
+        ":util_custatevec",
+    ],
+)
+
+cuda_library(
+    name = "simulator_custatevecex",
+    hdrs = [
+        "simulator_custatevecex.h",
+    ],
+    deps = [
+        ":io",
+        ":statespace_custatevecex",
+        ":util_custatevec",
+        ":util_custatevecex",
     ],
 )
 

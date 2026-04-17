@@ -1,3 +1,4 @@
+# pylint: disable=wrong-import-position
 # Copyright 2019 Google LLC. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import importlib
+
 from qsimcirq import qsim_decide
 
 
@@ -34,6 +35,8 @@ def _load_qsim_gpu():
     instr = qsim_decide.detect_gpu()
     if instr == 0:
         qsim_gpu = importlib.import_module("qsimcirq.qsim_cuda")
+    elif instr == 3:
+        qsim_gpu = importlib.import_module("qsimcirq.qsim_hip")
     else:
         qsim_gpu = None
     return qsim_gpu
@@ -48,14 +51,24 @@ def _load_qsim_custatevec():
     return qsim_custatevec
 
 
+def _load_qsim_custatevecex():
+    instr = qsim_decide.detect_custatevecex()
+    if instr == 2:
+        qsim_custatevecex = importlib.import_module("qsimcirq.qsim_custatevecex")
+    else:
+        qsim_custatevecex = None
+    return qsim_custatevecex
+
+
 qsim = _load_simd_qsim()
 qsim_gpu = _load_qsim_gpu()
 qsim_custatevec = _load_qsim_custatevec()
+qsim_custatevecex = _load_qsim_custatevecex()
 
-from .qsim_circuit import add_op_to_opstring, add_op_to_circuit, QSimCircuit
+# Note: the following imports must remain at the bottom of this file.
+
+from qsimcirq._version import __version__
+
+from .qsim_circuit import QSimCircuit, add_op_to_circuit, add_op_to_opstring
 from .qsim_simulator import QSimOptions, QSimSimulator
 from .qsimh_simulator import QSimhSimulator
-
-from qsimcirq._version import (
-    __version__,
-)

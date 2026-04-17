@@ -1,32 +1,148 @@
-EIGEN_PREFIX = "d10b27fe37736d2944630ecd7557cefa95cf87c9"
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# If you change the following values, update the values in ./WORKSPACE too.
+EIGEN_COMMIT = "b66188b5dfd147265bfa9ec47595ca0db72d21f5"
 EIGEN_URL = "https://gitlab.com/libeigen/eigen/-/archive/"
 
+# Default build targets. Additional ones are added conditionally below.
 TARGETS = qsim
 TESTS = run-cxx-tests
 
-CXX=g++
-NVCC=nvcc
-
-CXXFLAGS = -O3 -fopenmp
-ARCHFLAGS = -march=native
-NVCCFLAGS = -O3
-
-# CUQUANTUM_DIR should be set.
-CUSTATEVECFLAGS = -I$(CUQUANTUM_DIR)/include -L${CUQUANTUM_DIR}/lib -L$(CUQUANTUM_DIR)/lib64 -lcustatevec -lcublas
-
-PYBIND11 = true
-
-export CXX
-export CXXFLAGS
-export ARCHFLAGS
-export NVCC
-export NVCCFLAGS
-export CUSTATEVECFLAGS
+# By default, we also build the pybind11-based Python interface.
+# Can be overriden via env variables or command-line flags
+PYBIND11 ?= true
 
 ifeq ($(PYBIND11), true)
-  TARGETS += pybind
-  TESTS += run-py-tests
+    TARGETS += pybind
+    TESTS += run-py-tests
 endif
+
+# Default options for Pytest (only used if the pybind interface is built).
+PYTESTFLAGS ?= -n auto -v
+
+# Default compilers and compiler flags.
+# Can be overriden via env variables or command-line flags.
+CXX ?= g++
+NVCC ?= nvcc
+HIPCC ?= hipcc
+
+BASE_CXXFLAGS := -std=c++17
+BASE_NVCCFLAGS := -std c++17 -Wno-deprecated-gpu-targets
+BASE_HIPCCFLAGS :=
+
+CXXFLAGS := $(BASE_CXXFLAGS) $(CXXFLAGS)
+NVCCFLAGS := $(BASE_NVCCFLAGS) $(NVCCFLAGS)
+HIPCCFLAGS := $(BASE_HIPCCFLAGS) $(HIPCCFLAGS)
+
+# GCC 15 and Binutils 2.45+ generate SFrame stack unwinding info. The current
+# SFrame only supports a subset of x86_64 registers. When GCC optimizes AVX*
+# instructions, it uses additional registers, and that causes the assembler to
+# produce (many) warnings. They are harmless for qsim because it does not rely
+# on SFrame. Silence those warnings if the assembler supports it.
+SUPPORTS_GSFRAME := $(shell $(CXX) -Wa,--gsframe=no -c -x c++ /dev/null \
+    -o /dev/null 2>/dev/null && echo "true")
+ifeq ($(SUPPORTS_GSFRAME),true)
+    CXXFLAGS += -Wa,--gsframe=no
+    NVCCFLAGS += -Xcompiler -Wa,--gsframe=no
+    HIPCCFLAGS += -Wa,--gsframe=no
+endif
+
+LTO_FLAGS := -flto=auto
+USING_CLANG := $(shell $(CXX) --version | grep -isq clang && echo "true")
+ifeq ($(USING_CLANG),true)
+    LTO_FLAGS := -flto
+endif
+
+ifdef DEBUG
+    DEBUG_FLAGS := -g -O0
+    CXXFLAGS += $(DEBUG_FLAGS)
+    NVCCFLAGS += $(DEBUG_FLAGS)
+    HIPCCFLAGS += $(DEBUG_FLAGS)
+else
+    CXXFLAGS += -O3 $(OPENMP_FLAGS) $(LTO_FLAGS)
+    NVCCFLAGS += -O3
+    HIPCCFLAGS += -O3
+endif
+
+# For compatibility with CMake, if $CUDAARCHS is set, use it to set the
+# architecture options to nvcc. Otherwise, default to the "native" option,
+# which is what our pybind11_interface/GetCUDAARCHS.cmake also does.
+ifneq (,$(CUDAARCHS))
+    # Avoid a common mistake that leads to difficult-to-diagnose errors.
+    COMMA := ,
+    ifeq ($(COMMA),$(findstring $(COMMA),$(CUDAARCHS)))
+        $(error Error: the value of the CUDAARCHS environment variable \
+                must use semicolons as separators, not commas)
+    endif
+    ARCHS := $(subst ;, ,$(CUDAARCHS))
+    NVCCFLAGS += $(foreach a,$(ARCHS),--generate-code arch=compute_$(a),code=sm_$(a))
+else
+    NVCCFLAGS += -arch=native
+endif
+
+# Determine whether we can include CUDA and cuStateVec support. We build for
+# CUDA if (i) we find $NVCC or (ii) $CUDA_PATH is set. For cuStateVec, there's
+# no way to find the cuQuantum libraries other than by being told, so we rely
+# on the user or calling environment to set variable $CUQUANTUM_ROOT.
+
+ifneq (,$(shell which $(NVCC)))
+    # nvcc adds appropriate -I and -L flags, so nothing more is needed here.
+    TARGETS += qsim-cuda
+    TESTS += run-cuda-tests
+else
+    ifneq (,$(strip $(CUDA_PATH)))
+        # $CUDA_PATH is set. Check that the path truly does exist.
+        ifneq (,$(strip $(wildcard $(CUDA_PATH)/.)))
+            # $CUDA_PATH is set, but we know we didn't find nvcc on the user's
+            # $PATH or as an absolute path (if $NVCC was set to a full path).
+            # Try the safest choice for finding nvcc & give up if that fails.
+            NVCC = $(CUDA_PATH)/bin/nvcc
+            ifneq (,$(strip $(wildcard $(NVCC))))
+                CXXFLAGS += -I$(CUDA_PATH)/include -L$(CUDA_PATH)/lib64
+                TARGETS += qsim-cuda
+                TESTS += run-cuda-tests
+            else
+                $(warning nvcc not found, so cannot build CUDA interfaces)
+            endif
+        else
+            $(warning $$CUDA_PATH is set, but the path does not seem to exist)
+        endif
+    endif
+endif
+
+ifneq (,$(strip $(CUQUANTUM_ROOT)))
+    # $CUQUANTUM_ROOT is set. Check that the path truly does exist.
+    ifneq (,$(strip $(wildcard $(CUQUANTUM_ROOT)/.)))
+        CUSVFLAGS =  -I$(CUQUANTUM_ROOT)/include
+        CUSVFLAGS += -L${CUQUANTUM_ROOT}/lib -L$(CUQUANTUM_ROOT)/lib64
+        CUSVFLAGS += -lcustatevec -lcublas
+        CUSTATEVECFLAGS ?= $(CUSVFLAGS)
+        TARGETS += qsim-custatevec
+        TARGETS += qsim-custatevecex
+        TESTS += run-custatevec-tests
+        TESTS += run-custatevecex-tests
+    TESTS += run-custatevecex-mpi-tests
+    else
+        $(warning $$CUQUANTUM_ROOT is set, but the path does not seem to exist)
+    endif
+endif
+
+# Export all vars to subprocesses without having to export them individually.
+.EXPORT_ALL_VARIABLES:
+
+# The rest is build rules and make targets.
 
 .PHONY: all
 all: $(TARGETS)
@@ -40,8 +156,16 @@ qsim-cuda:
 	$(MAKE) -C apps/ qsim-cuda
 
 .PHONY: qsim-custatevec
-qsim-custatevec:
+qsim-custatevec: | check-cuquantum-root-set
 	$(MAKE) -C apps/ qsim-custatevec
+
+.PHONY: qsim-custatevecex
+qsim-custatevecex: | check-cuquantum-root-set
+	$(MAKE) -C apps/ qsim-custatevecex
+
+.PHONY: qsim-hip
+qsim-hip:
+	$(MAKE) -C apps/ qsim-hip
 
 .PHONY: pybind
 pybind:
@@ -56,8 +180,16 @@ cuda-tests:
 	$(MAKE) -C tests/ cuda-tests
 
 .PHONY: custatevec-tests
-custatevec-tests:
+custatevec-tests: | check-cuquantum-root-set
 	$(MAKE) -C tests/ custatevec-tests
+
+.PHONY: custatevecex-tests
+custatevecex-tests: | check-cuquantum-root-set
+	$(MAKE) -C tests/ custatevecex-tests
+
+.PHONY: hip-tests
+hip-tests:
+	$(MAKE) -C tests/ hip-tests
 
 .PHONY: run-cxx-tests
 run-cxx-tests: cxx-tests
@@ -71,25 +203,58 @@ run-cuda-tests: cuda-tests
 run-custatevec-tests: custatevec-tests
 	$(MAKE) -C tests/ run-custatevec-tests
 
-PYTESTS = $(shell find qsimcirq_tests/ -name '*_test.py')
+.PHONY: run-custatevecex-tests
+run-custatevecex-tests: custatevecex-tests
+	$(MAKE) -C tests/ run-custatevecex-tests
+
+.PHONY: run-custatevecex-mpi-tests
+run-custatevecex-mpi-tests: custatevecex-tests
+	$(MAKE) -C tests/ run-custatevecex-mpi-tests
+
+.PHONY: run-hip-tests
+run-hip-tests: hip-tests
+	$(MAKE) -C tests/ run-hip-tests
+
+PYTESTS := $(wildcard qsimcirq_tests/*_test.py)
 
 .PHONY: run-py-tests
 run-py-tests: pybind
-	for exe in $(PYTESTS); do if ! python3 -m pytest $$exe; then exit 1; fi; done
+	python3 -m pytest $(PYTESTFLAGS) $(PYTESTS)
 
-.PHONY: run-tests
-run-tests: $(TESTS)
+.PHONY: run-tests tests
+run-tests tests: $(TESTS)
+
+.PHONY: check-cuquantum-root-set
+check-cuquantum-root-set:
+	@if test -z "$(CUQUANTUM_ROOT)"; then \
+	    echo Error: 'Must set $$CUQUANTUM_ROOT to use cuStateVec.'; \
+	    exit 1; \
+	fi
+
+# Check whether wget or curl is available on this system.
+ifneq (,$(shell command -v wget))
+    DOWNLOAD_CMD := wget
+else ifneq (,$(shell command -v curl))
+    DOWNLOAD_CMD := curl --fail -L -O
+else
+    $(error Neither wget nor curl found in PATH. Please install curl or wget.)
+endif
 
 eigen:
-	$(shell\
-		rm -rf eigen;\
-		wget $(EIGEN_URL)/$(EIGEN_PREFIX)/eigen-$(EIGEN_PREFIX).tar.gz;\
-		tar -xf eigen-$(EIGEN_PREFIX).tar.gz && mv eigen-$(EIGEN_PREFIX) eigen;\
-		rm eigen-$(EIGEN_PREFIX).tar.gz;)
+	-rm -rf eigen
+	$(DOWNLOAD_CMD) $(EIGEN_URL)/$(EIGEN_COMMIT)/eigen-$(EIGEN_COMMIT).tar.gz
+	tar -xzf eigen-$(EIGEN_COMMIT).tar.gz && mv eigen-$(EIGEN_COMMIT) eigen
+	rm eigen-$(EIGEN_COMMIT).tar.gz
 
 .PHONY: clean
 clean:
-	rm -rf eigen;
+	-rm -rf eigen
 	-$(MAKE) -C apps/ clean
 	-$(MAKE) -C tests/ clean
 	-$(MAKE) -C pybind_interface/ clean
+
+LOCAL_VARS = TARGETS TESTS PYTESTS PYTESTFLAGS CXX CXXFLAGS NVCC NVCCFLAGS $\
+	HIPCC HIPCCFLAGS CUDA_PATH CUQUANTUM_ROOT CUSTATEVECFLAGS SUPPORTS_GSFRAME
+
+.PHONY: print-vars
+print-vars: ; @$(foreach n,$(sort $(LOCAL_VARS)),echo $n=$($n);)

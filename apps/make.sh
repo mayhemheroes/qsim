@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright 2019 Google LLC. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/bin/bash
-
 # This file provides an alternate method for building apps in this directory.
 # Prefer using the Makefile (e.g. `make -C apps/`) if possible.
 
@@ -23,9 +22,25 @@ g++ -O3 -march=native -fopenmp -o qsim_amplitudes.x qsim_amplitudes.cc
 g++ -O3 -march=native -fopenmp -o qsimh_base.x qsimh_base.cc
 g++ -O3 -march=native -fopenmp -o qsimh_amplitudes.x qsimh_amplitudes.cc
 
-nvcc -O3 -o qsim_base_cuda.x qsim_base_cuda.cu
-nvcc -O3 -o qsim_qtrajectory_cuda.x qsim_qtrajectory_cuda.cu
+if command -v nvcc &>/dev/null; then
+    nvcc -O3 -o qsim_base_cuda.x qsim_base_cuda.cu
+    nvcc -O3 -o qsim_qtrajectory_cuda.x qsim_qtrajectory_cuda.cu
 
-# CUQUANTUM_DIR should be set.
-CUSTATEVECFLAGS="-I${CUQUANTUM_DIR}/include -L${CUQUANTUM_DIR}/lib -L${CUQUANTUM_DIR}/lib64 -lcustatevec -lcublas"
-nvcc -O3 $CUSTATEVECFLAGS -o qsim_base_custatevec.x qsim_base_custatevec.cu
+    if [ -n "$CUQUANTUM_ROOT" ]; then
+        declare -a CUSTATEVECFLAGS
+        CUSTATEVECFLAGS=(
+            "-I${CUQUANTUM_ROOT}/include"
+            "-L${CUQUANTUM_ROOT}/lib"
+            "-L${CUQUANTUM_ROOT}/lib64"
+            "-lcustatevec"
+            "-lcublas"
+        )
+        nvcc -O3 "${CUSTATEVECFLAGS[@]}" \
+             -o qsim_base_custatevec.x qsim_base_custatevec.cu
+        nvcc -O3 "${CUSTATEVECFLAGS[@]}" \
+             -o qsim_base_custatevecex.x qsim_base_custatevecex.cu
+    fi
+elif command -v hipcc &>/dev/null; then
+    hipcc -O3 -o qsim_base_hip.x qsim_base_cuda.cu
+    hipcc -O3 -o qsim_qtrajectory_hip.x qsim_qtrajectory_cuda.cu
+fi

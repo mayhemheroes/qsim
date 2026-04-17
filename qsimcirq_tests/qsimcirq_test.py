@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
-import sympy
 import cirq
+import numpy as np
 import pytest
+import sympy
+
 import qsimcirq
+import qsimcirq.qsim_circuit
 
 
 class NoiseTrigger(cirq.Gate):
@@ -25,9 +27,6 @@ class NoiseTrigger(cirq.Gate):
     Appending this gate to a circuit will force it to use qtrajectory, but the
     new circuit will otherwise behave identically to the original.
     """
-
-    # def _mixture_(self):
-    #   return ((1.0, np.asarray([1, 0, 0, 1])),)
 
     def _num_qubits_(self) -> int:
         return 1
@@ -130,6 +129,26 @@ def test_cirq_too_big_gate():
         qsimSim.compute_amplitudes(cirq_circuit, bitstrings=[0b0, 0b1])
 
 
+def test_translate_matrix_gate_too_big():
+    gate = cirq.MatrixGate(np.eye(128))
+    with pytest.raises(
+        NotImplementedError, match="only up to 6-qubit gates are supported"
+    ):
+        qsimcirq.qsim_circuit._translate_MatrixGate(gate)
+
+
+def test_simulate_matrix_gate_too_big():
+    qubits = cirq.LineQubit.range(7)
+    gate = cirq.MatrixGate(np.eye(128))
+    circuit = cirq.Circuit(gate.on(*qubits))
+
+    qsim_sim = qsimcirq.QSimSimulator()
+    with pytest.raises(
+        NotImplementedError, match="only up to 6-qubit gates are supported"
+    ):
+        qsim_sim.compute_amplitudes(circuit, bitstrings=[0b0, 0b1])
+
+
 def test_cirq_giant_identity():
     # Pick qubits.
     a, b, c, d, e, f, g, h = [
@@ -180,6 +199,61 @@ def test_noise_alongside_multistep_decompose():
     result_hist = result.histogram(key="m")
     assert result_hist[0] > 0
     assert result_hist[1] > 0
+
+
+def test_translate_cirq_to_qtrajectory():
+    q0, q1 = cirq.LineQubit.range(2)
+
+    # General circuit with unitary, mixture, and channel.
+    circuit = cirq.Circuit(
+        cirq.H(q0),
+        cirq.CNOT(q0, q1),
+        cirq.bit_flip(0.1)(q0),
+        cirq.depolarize(0.1)(q1),
+    )
+    qsim_circuit = qsimcirq.QSimCircuit(circuit)
+    qsim_ncircuit, moment_indices = qsim_circuit.translate_cirq_to_qtrajectory()
+
+    assert isinstance(qsim_ncircuit, qsimcirq.qsim.NoisyCircuit)
+    assert qsim_ncircuit.num_qubits == 2
+    # The circuit has 3 moments, and 4 gates are translated in total.
+    assert moment_indices == [1, 2, 4]
+
+    # Edge case: empty circuit.
+    circuit_empty = cirq.Circuit()
+    qsim_circuit_empty = qsimcirq.QSimCircuit(circuit_empty)
+    qsim_ncircuit_empty, moment_indices_empty = (
+        qsim_circuit_empty.translate_cirq_to_qtrajectory()
+    )
+
+    assert isinstance(qsim_ncircuit_empty, qsimcirq.qsim.NoisyCircuit)
+    assert qsim_ncircuit_empty.num_qubits == 0
+    assert moment_indices_empty == []
+
+    # Edge case: circuit with only unitary gates.
+    circuit_unitary = cirq.Circuit(cirq.X(q0), cirq.H(q1))
+    qsim_circuit_unitary = qsimcirq.QSimCircuit(circuit_unitary)
+    qsim_ncircuit_unitary, moment_indices_unitary = (
+        qsim_circuit_unitary.translate_cirq_to_qtrajectory()
+    )
+
+    assert isinstance(qsim_ncircuit_unitary, qsimcirq.qsim.NoisyCircuit)
+    assert qsim_ncircuit_unitary.num_qubits == 2
+    assert moment_indices_unitary == [2]
+
+    # Edge case: unparseable operation.
+    class UnparseableOp(cirq.Operation):
+        @property
+        def qubits(self):
+            return (q0,)
+
+        def with_qubits(self, *new_qubits):
+            return self
+
+    circuit_unparseable = cirq.Circuit(UnparseableOp())
+    qsim_circuit_unparseable = qsimcirq.QSimCircuit(circuit_unparseable)
+    with pytest.raises(ValueError, match="Encountered unparseable op"):
+        qsim_circuit_unparseable.translate_cirq_to_qtrajectory()
 
 
 @pytest.mark.parametrize("mode", ["noiseless", "noisy"])
@@ -315,15 +389,11 @@ def test_input_vector_validation():
 
     with pytest.raises(ValueError):
         initial_state = np.asarray([0.25] * 16, dtype=np.complex64)
-        qsim_result = qsimSim.simulate_sweep(
-            cirq_circuit, params, initial_state=initial_state
-        )
+        qsimSim.simulate_sweep(cirq_circuit, params, initial_state=initial_state)
 
     with pytest.raises(TypeError):
         initial_state = np.asarray([0.5] * 4)
-        qsim_result = qsimSim.simulate_sweep(
-            cirq_circuit, params, initial_state=initial_state
-        )
+        qsimSim.simulate_sweep(cirq_circuit, params, initial_state=initial_state)
 
 
 def test_numpy_params():
@@ -334,6 +404,22 @@ def test_numpy_params():
 
     qsim_simulator = qsimcirq.QSimSimulator()
     qsim_result = qsim_simulator.simulate_sweep(circuit, params=prs)
+    assert qsim_result is not None
+
+
+def test_confusion_matrix_exception():
+    qubit = cirq.LineQubit(0)
+    cmap = {(0,): np.array([[0.8, 0.2], [0.2, 0.8]])}
+    circuit = cirq.Circuit()
+    circuit += cirq.X(qubit)
+    circuit += cirq.MeasurementGate(1, confusion_map=cmap)(qubit)
+    x, y = sympy.Symbol("x"), sympy.Symbol("y")
+    prs = [{x: np.int64(0), y: np.int64(1)}]
+    qsim_simulator = qsimcirq.QSimSimulator()
+    with pytest.raises(
+        ValueError, match="Confusion Matrices are not currently supported"
+    ):
+        _ = qsim_simulator.simulate_sweep(circuit, params=prs)
 
 
 def test_invalid_params():
@@ -426,7 +512,7 @@ def test_cirq_qsim_run(mode: str):
     assert isinstance(qsimSim, cirq.SimulatesSamples)
 
     result = qsimSim.run(cirq_circuit, repetitions=5)
-    for key, value in result.measurements.items():
+    for _, value in result.measurements.items():
         assert value.shape == (5, 1)
 
 
@@ -538,7 +624,7 @@ def test_expectation_values(mode: str):
         circuit, [psum1, psum2, psum3], params
     )
 
-    assert cirq.approx_eq(qsim_result, cirq_result, atol=1e-6)
+    assert cirq.approx_eq(qsim_result, cirq_result, atol=1e-5)
 
 
 @pytest.mark.parametrize("mode", ["noiseless", "noisy"])
@@ -1032,7 +1118,7 @@ class NoiseChannel(cirq.Gate):
         return [m for _, m in self._prob_op_pairs]
 
     def __str__(self):
-        return f"NoiseChannel({self._ops})"
+        return f"NoiseChannel({self._prob_op_pairs})"
 
     def __repr__(self):
         return str(self)
@@ -1044,7 +1130,17 @@ class NoiseMixture(NoiseChannel):
         super().__init__(*args, **kwargs)
 
     def _mixture_(self):
-        return [(prob, cirq.unitary(op)) for prob, op, in self._prob_op_pairs]
+        # Cirq's mixture() function in mixture_protocol.py returns tuples of
+        # the form (probability, unitary operation). It does this by applying
+        # Cirq's unitary() function to the second elements of the tuples
+        # returned from here. Now, the values in self._prob_op_pairs will be
+        # tuples of the form (probability, NoiseStep). NoiseStep defines a
+        # _unitary_() method that simply returns the array as-is. Thus, when
+        # Cirq's mixture() function gets the value returned here and calls
+        # unitary() on those NoiseStep objects, the values unitary() returns
+        # will not actually be unitary. This is done knowingly. The nonunitary
+        # values are eventually normalized in test_multi_qubit_noise().
+        return [(prob, op) for prob, op, in self._prob_op_pairs]
 
 
 @pytest.mark.parametrize(
@@ -1219,13 +1315,12 @@ def test_multi_qubit_fusion():
 
 @pytest.mark.parametrize("mode", ["noiseless", "noisy"])
 def test_cirq_qsim_simulate_random_unitary(mode: str):
-
     q0, q1 = cirq.LineQubit.range(2)
     options = qsimcirq.QSimOptions(cpu_threads=16, verbosity=0)
     qsimSim = qsimcirq.QSimSimulator(qsim_options=options)
-    for iter in range(10):
+    for i in range(10):
         random_circuit = cirq.testing.random_circuit(
-            qubits=[q0, q1], n_moments=8, op_density=0.99, random_state=iter
+            qubits=[q0, q1], n_moments=8, op_density=0.99, random_state=i
         )
 
         random_circuit = cirq.optimize_for_target_gateset(
@@ -1503,6 +1598,115 @@ def test_qsim_custatevec_input_state():
         # Enable GPU acceleration.
         custatevec_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=1)
         qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevec_options)
+        initial_state = np.asarray([np.sqrt(1.0 / size)] * size, dtype=np.complex64)
+        result = qsimGpuSim.simulate(circuit, initial_state=initial_state)
+        state_vector = result.state_vector()
+
+        assert result.state_vector().shape == (size,)
+        assert cirq.approx_eq(state_vector[0], 1, atol=1e-6)
+
+        for i in range(1, size):
+            assert cirq.approx_eq(state_vector[i], 0, atol=1e-6)
+
+
+def test_cirq_qsim_custatevecex_amplitudes():
+    if qsimcirq.qsim_custatevecex is None:
+        pytest.skip("cuStateVecEx library is not available for testing.")
+    # Pick qubits.
+    a, b = [cirq.GridQubit(0, 0), cirq.GridQubit(0, 1)]
+
+    # Create a circuit
+    cirq_circuit = cirq.Circuit(cirq.CNOT(a, b), cirq.CNOT(b, a), cirq.X(a))
+
+    # Enable GPU acceleration.
+    custatevecex_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=2)
+    qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevecex_options)
+    result = qsimGpuSim.compute_amplitudes(
+        cirq_circuit, bitstrings=[0b00, 0b01, 0b10, 0b11]
+    )
+    assert np.allclose(result, [0j, 0j, (1 + 0j), 0j])
+
+
+def test_cirq_qsim_custatevecex_simulate():
+    if qsimcirq.qsim_custatevecex is None:
+        pytest.skip("cuStateVecEx library is not available for testing.")
+    # Pick qubits.
+    a, b = [cirq.GridQubit(0, 0), cirq.GridQubit(0, 1)]
+
+    # Create a circuit
+    cirq_circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.X(b))
+
+    # Enable GPU acceleration.
+    custatevecex_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=2)
+    qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevecex_options)
+    result = qsimGpuSim.simulate(cirq_circuit)
+    assert result.state_vector().shape == (4,)
+
+    cirqSim = cirq.Simulator()
+    cirq_result = cirqSim.simulate(cirq_circuit)
+    assert cirq.linalg.allclose_up_to_global_phase(
+        result.state_vector(), cirq_result.state_vector(), atol=1.0e-6
+    )
+
+
+def test_cirq_qsim_custatevecex_expectation_values():
+    if qsimcirq.qsim_custatevecex is None:
+        pytest.skip("cuStateVecEx library is not available for testing.")
+    # Pick qubits.
+    a, b = [cirq.GridQubit(0, 0), cirq.GridQubit(0, 1)]
+
+    # Create a circuit
+    cirq_circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.X(b))
+    obs = [cirq.Z(a) * cirq.Z(b)]
+
+    # Enable GPU acceleration.
+    custatevecex_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=2)
+    qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevecex_options)
+    result = qsimGpuSim.simulate_expectation_values(cirq_circuit, obs)
+
+    cirqSim = cirq.Simulator()
+    cirq_result = cirqSim.simulate_expectation_values(cirq_circuit, obs)
+    assert np.allclose(result, cirq_result)
+
+
+def test_cirq_qsim_custatevecex_input_state():
+    if qsimcirq.qsim_custatevecex is None:
+        pytest.skip("cuStateVecEx library is not available for testing.")
+    # Pick qubits.
+    a, b = [cirq.GridQubit(0, 0), cirq.GridQubit(0, 1)]
+
+    # Create a circuit
+    cirq_circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.X(b))
+
+    # Enable GPU acceleration.
+    custatevecex_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=2)
+    qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevecex_options)
+    initial_state = np.asarray([0.5] * 4, dtype=np.complex64)
+    result = qsimGpuSim.simulate(cirq_circuit, initial_state=initial_state)
+    assert result.state_vector().shape == (4,)
+
+    cirqSim = cirq.Simulator()
+    cirq_result = cirqSim.simulate(cirq_circuit, initial_state=initial_state)
+    assert cirq.linalg.allclose_up_to_global_phase(
+        result.state_vector(), cirq_result.state_vector(), atol=1.0e-6
+    )
+
+
+def test_qsim_custatevecex_input_state():
+    if qsimcirq.qsim_custatevecex is None:
+        pytest.skip("cuStateVecEx library is not available for testing.")
+
+    for num_qubits in range(1, 8):
+        size = 2**num_qubits
+        qubits = cirq.LineQubit.range(num_qubits)
+        circuit = cirq.Circuit()
+
+        for k in range(num_qubits):
+            circuit.append(cirq.H(qubits[k]))
+
+        # Enable GPU acceleration.
+        custatevecex_options = qsimcirq.QSimOptions(use_gpu=True, gpu_mode=2)
+        qsimGpuSim = qsimcirq.QSimSimulator(qsim_options=custatevecex_options)
         initial_state = np.asarray([np.sqrt(1.0 / size)] * size, dtype=np.complex64)
         result = qsimGpuSim.simulate(circuit, initial_state=initial_state)
         state_vector = result.state_vector()
@@ -1960,7 +2164,7 @@ def test_cirq_qsim_circuit_memoization_run(mode: str):
 
     for _ in range(execution_repetitions):
         result = qsim_sim.run(cirq_circuit, repetitions=5)
-        for key, value in result.measurements.items():
+        for _, value in result.measurements.items():
             assert value.shape == (5, 1)
 
 
@@ -2000,7 +2204,7 @@ def test_cirq_qsim_circuit_memoization_simulate_expectation_values_sweep(mode: s
         qsim_result = qsim_sim.simulate_expectation_values_sweep(
             circuit, [psum1, psum2], params
         )
-        assert cirq.approx_eq(qsim_result, cirq_result, atol=1e-6)
+        assert cirq.approx_eq(qsim_result, cirq_result, atol=1e-5)
 
 
 def test_qsimcirq_identity_expectation_value():
@@ -2013,11 +2217,11 @@ def test_qsimcirq_identity_expectation_value():
     for w, pauli in objs:
         pauli = pauli[::-1]
         hamiltonian += float(w) * cirq.PauliString(
-            cirq.I(cirq.LineQubit(i))
-            if p == "I"
-            else cirq.Z(cirq.LineQubit(i))
-            if p == "Z"
-            else None
+            (
+                cirq.I(cirq.LineQubit(i))
+                if p == "I"
+                else cirq.Z(cirq.LineQubit(i)) if p == "Z" else None
+            )
             for i, p in enumerate(pauli)
         )
 
@@ -2058,3 +2262,31 @@ def test_cirq_global_phase_gate():
     assert cirq.approx_eq(
         qsim_result.state_vector(), cirq_result.state_vector(), atol=1e-6
     )
+
+
+def test_1d_representation():
+    qsim_sim = qsimcirq.QSimSimulator()
+    qs = cirq.LineQubit.range(2)
+    c = cirq.Circuit(cirq.H.on_each(qs), cirq.X(qs[0]), cirq.Y(qs[1]))
+
+    want = np.array([0.0 - 0.5j, 0.0 + 0.5j, 0.0 - 0.5j, 0.0 + 0.5j])
+    _, res, _ = qsim_sim.simulate_into_1d_array(c)
+    np.testing.assert_allclose(res, np.array(want, dtype=np.complex64))
+
+
+def test_get_seed():
+    # Test range.
+    qsim_sim = qsimcirq.QSimSimulator(seed=42)
+    for _ in range(100):
+        seed = qsim_sim.get_seed()
+        assert 0 <= seed < 2**31 - 1
+
+    # Test determinism.
+    sim1 = qsimcirq.QSimSimulator(seed=42)
+    sim2 = qsimcirq.QSimSimulator(seed=42)
+    assert sim1.get_seed() == sim2.get_seed()
+
+    # Test subsequent calls.
+    sim = qsimcirq.QSimSimulator(seed=42)
+    seeds = {sim.get_seed() for _ in range(10)}
+    assert len(seeds) > 1

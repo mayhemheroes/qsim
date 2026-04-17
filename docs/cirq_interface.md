@@ -44,7 +44,7 @@ directory.
 make run-py-tests
 ```
 This will run
-[qsimcirq_test](https://github.com/quantumlib/qsim/blob/master/qsimcirq_tests/qsimcirq_test.py),
+[qsimcirq_test](https://github.com/quantumlib/qsim/blob/main/qsimcirq_tests/qsimcirq_test.py),
 which invokes qsim through the qsim-Cirq interface.
 
 ## Interface design and operations
@@ -79,7 +79,7 @@ average PC, or up to 40 qubits on high-performance VMs).
 Options for the simulator, including number of threads and verbosity, can be
 set with the `qsim_options` field, which accepts a `QSimOptions` object as
 defined in
-[qsim_simulator.py](https://github.com/quantumlib/qsim/blob/master/qsimcirq/qsim_simulator.py).
+[qsim_simulator.py](https://github.com/quantumlib/qsim/blob/main/qsimcirq/qsim_simulator.py).
 These options can also be passed as a {str: val} dict, using the format
 described by that class.
 
@@ -97,9 +97,9 @@ my_sim = qsimcirq.QSimSimulator()
 myres = my_sim.compute_amplitudes(program=my_circuit,
                                   bitstrings=[0b00, 0b01, 0b10, 0b11])
 ```
-In the above example, the simulation is performed for the specified bitstrings
+In the example above, the simulation is performed for the specified bitstrings
 of length 2. All the bitstring lengths should be equal to the number of qubits
-in `qsim_circuit`. Otherwise, BitstringsFromStream will raise an error.
+in `qsim_circuit`. Otherwise, `BitstringsFromStream` will raise an error.
 
 Finally, to retrieve sample measurements the `run` method can be used. This requires
 the circuit to have measurements to sample from, else an error will be raised.
@@ -133,7 +133,7 @@ myres = my_sim.simulate(program=my_circuit)
 
 `QSimhSimulator` uses a hybrid Schrödinger-Feynman simulator. This limits it to
 returning amplitudes for specific output bitstrings, but raises its upper
-bound on number of qubits simulated (50+ qubits, depending on depth).
+bound on number of qubits simulated (50+ qubits, depending on circuit depth).
 
 To acquire amplitudes for all output bitstrings of length 2:
 ```
@@ -180,19 +180,32 @@ and run on a device with available NVIDIA GPUs.
 Compilation for GPU follows the same steps outlined in the
 [Compiling qsimcirq](./cirq_interface.md#compiling-qsimcirq) section.
 To compile with the NVIDIA cuStateVec library (v1.0.0 or higher is required),
-set the environmment variable `CUQUANTUM_DIR` to the path to the cuStateVec
+set the environmment variable `CUQUANTUM_ROOT` to the path to the cuStateVec
 library.
 
-`QSimOptions` provides five parameters to configure GPU execution. `use_gpu`
+`QSimOptions` provides six parameters to configure GPU execution. `use_gpu`
 is required to enable GPU execution:
 * `use_gpu`: if True, use GPU instead of CPU for simulation.
-* `gpu_mode`: use CUDA if set to 0 (default value) or use the NVIDIA cuStateVec
-library if set to any other value.
+* `gpu_mode`: use CUDA if set to 0 (default value), use the NVIDIA cuStateVec
+if set to 1 or use the NVIDIA cuStateVecEx library if set to any other value.
 
-If `use_gpu` is set and `gpu_mode` is set to 0, the remaining parameters can
-optionally be set to fine-tune StateSpace perfomance for a specific device.
+In the case of the NVIDIA cuStateVecEx library, simulations can be performed
+in multi-device / multi-node environments. A CUDA-aware MPI library is required
+for multi-node. Currently, only Open MPI is supported.
+
+If `use_gpu` is set and `gpu_mode` is set to 0, two parameters can
+optionally be set to fine-tune StateSpace performance for a specific device.
 In most cases, the default values provide good performance.
 * `gpu_state_threads`: number of threads per CUDA block to use for the GPU
 StateSpace. This must be a power of 2 in the range [32, 1024].
 * `gpu_data_blocks`: number of data blocks to use for the GPU StateSpace.
 Below 16 data blocks, performance is noticeably reduced.
+
+If `use_gpu` is set and `gpu_mode` is set to 2 or greater (cuStateVecEx), two
+parameters can be set to adjust the transfer buffer size for MPI communication
+or network type.
+* `gpu_cusvex_log_buf_size`: log2 of the buffer size. Default value is 30,
+i.e. the buffer size is 2^30 bytes.
+* `gpu_cusvex_network_type`: Device network type for multi-device:
+0=Switch (default), 1=FullMesh. Or layered network type for multi-process:
+0=SuperPOD (default), 1=GB200NVL, 2=SwitchTree, 3=Communicator.

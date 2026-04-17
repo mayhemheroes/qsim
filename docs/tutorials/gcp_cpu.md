@@ -15,12 +15,12 @@ instance heading, ensure that your VM has the following properties:
     1. Select the tab for the **Compute Optimized** machine family.
     2. In the machine **Series** option, choose **C2**.
     3. In the **Machine type** option, choose **c2-standard-16**. This option
-       gives you 16 virtual CPUS and 64MB of RAM.
+       gives you 16 virtual CPUS and 64GB of RAM.
        Note: This choice is for demonstration purposes only. For a live
        experiment, see [Choosing hardware for your qsim
        simulation](/qsim/choose_hw).
 *   In the **Boot disk section**, click the **Change** button, and choose
-    **Container-Optimized** operating system. This overrides the seletion in
+    **Container-Optimized** operating system. This overrides the selection in
     step 3 in [Create a Linux VM
     instance](https://cloud.google.com/compute/docs/quickstart-linux#create_a_linux_vm_instance).
 *   In the **Firewall** section, ensure that both the **Allow HTTP traffic**
@@ -227,7 +227,7 @@ Instances dashboard to prevent further billing.
 
 You are now ready to run your own large simulations on Google Cloud. If you want
 to try a large circuit on Google Cloud, you can connect the
-[Simulate a large quantum circuit](https://colab.sandbox.google.com/github/quantumlib/qsim/blob/master/docs/tutorials/q32d14.ipynb)
+[Simulate a large quantum circuit](https://colab.sandbox.google.com/github/quantumlib/qsim/blob/main/docs/tutorials/q32d14.ipynb)
 Colab notebook to your VM
 ([documentation](https://quantumai.google/qsim/tutorials/q32d14)).
 

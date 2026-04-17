@@ -12,35 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.28)
 project(qsim LANGUAGES CXX CUDA)
 
-IF (WIN32)
-    set(CMAKE_CXX_FLAGS "/O2 /openmp")
-ELSE()
-    set(CMAKE_CXX_FLAGS "-O3 -fopenmp")
-ENDIF()
-
-if(APPLE)
-    set(CMAKE_CXX_STANDARD 14)
-    include_directories("/usr/local/include" "/usr/local/opt/llvm/include")
-    link_directories("/usr/local/lib" "/usr/local/opt/llvm/lib")
+if(MSVC)
+    add_compile_options(/openmp)
+else()
+    add_compile_options(-fno-lto)
 endif()
 
-INCLUDE(../GetPybind11.cmake)
-find_package(PythonLibs 3.7 REQUIRED)
-find_package(CUDA REQUIRED)
+if(APPLE)
+    include_directories(
+      "/usr/local/include"
+      "/usr/local/opt/llvm/include"
+      "/opt/homebrew/include"
+      "/opt/homebrew/opt/llvm@19/include"
+    )
+    link_directories(
+      "/usr/local/lib"
+      "/usr/local/opt/llvm/lib"
+      "/opt/homebrew/lib"
+      "/opt/homebrew/opt/llvm@19/lib"
+    )
+endif()
+
+include(../GetPybind11.cmake)
+find_package(Python3 3.10 REQUIRED)
 
 include_directories(${pybind11_INCLUDE_DIRS})
 
-include_directories($ENV{CUQUANTUM_DIR}/include)
-link_directories($ENV{CUQUANTUM_DIR}/lib $ENV{CUQUANTUM_DIR}/lib64)
+include_directories($ENV{CUQUANTUM_ROOT}/include)
+link_directories($ENV{CUQUANTUM_ROOT}/lib $ENV{CUQUANTUM_ROOT}/lib64)
 
-cuda_add_library(qsim_custatevec MODULE pybind_main_custatevec.cpp)
-target_link_libraries(qsim_custatevec -lcustatevec -lcublas)
-
+add_library(qsim_custatevec MODULE pybind_main_custatevec.cpp)
 set_target_properties(qsim_custatevec PROPERTIES
-       PREFIX "${PYTHON_MODULE_PREFIX}"
-       SUFFIX "${PYTHON_MODULE_EXTENSION}"
+    PREFIX "${PYTHON_MODULE_PREFIX}"
+    SUFFIX "${PYTHON_MODULE_EXTENSION}"
 )
 set_source_files_properties(pybind_main_custatevec.cpp PROPERTIES LANGUAGE CUDA)
+
+target_link_libraries(qsim_custatevec PRIVATE qsim_openmp_config -lcustatevec -lcublas)

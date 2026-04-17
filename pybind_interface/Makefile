@@ -1,33 +1,82 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+PYTHON_CONFIG := $(shell command -v python3-config)
+ifeq (,$(PYTHON_CONFIG))
+    PY_VER := $(shell python3 --version 2>&1 | awk -F'[ .]' '{print $$2"."$$3}')
+    PYTHON_CONFIG := $(shell command -v python$(PY_VER)-config)
+    ifeq (,$(PYTHON_CONFIG))
+        $(error Could not find python3-config or python$(PY_VER)-config.)
+    endif
+endif
+
+SUFFIX := $(shell $(PYTHON_CONFIG) --extension-suffix)
+
 # The names of the shared libraries that result after compiling qsim for Pybind11
-QSIMLIB_BASIC = ../qsimcirq/qsim_basic`python3-config --extension-suffix`
-QSIMLIB_SSE = ../qsimcirq/qsim_sse`python3-config --extension-suffix`
-QSIMLIB_AVX2 = ../qsimcirq/qsim_avx2`python3-config --extension-suffix`
-QSIMLIB_AVX512 = ../qsimcirq/qsim_avx512`python3-config --extension-suffix`
-QSIMLIB_CUDA = ../qsimcirq/qsim_cuda`python3-config --extension-suffix`
-QSIMLIB_CUSTATEVEC = ../qsimcirq/qsim_custatevec`python3-config --extension-suffix`
-QSIMLIB_DECIDE = ../qsimcirq/qsim_decide`python3-config --extension-suffix`
+QSIMLIB_BASIC = ../qsimcirq/qsim_basic$(SUFFIX)
+QSIMLIB_SSE = ../qsimcirq/qsim_sse$(SUFFIX)
+QSIMLIB_AVX2 = ../qsimcirq/qsim_avx2$(SUFFIX)
+QSIMLIB_AVX512 = ../qsimcirq/qsim_avx512$(SUFFIX)
+QSIMLIB_CUDA = ../qsimcirq/qsim_cuda$(SUFFIX)
+QSIMLIB_CUSTATEVEC = ../qsimcirq/qsim_custatevec$(SUFFIX)
+QSIMLIB_CUSTATEVECEX = ../qsimcirq/qsim_custatevecex$(SUFFIX)
+QSIMLIB_HIP = ../qsimcirq/qsim_hip$(SUFFIX)
+QSIMLIB_DECIDE = ../qsimcirq/qsim_decide$(SUFFIX)
+
+# Certain Pybind11 flags are common for all cases.
+PYBIND_INCLUDES := $(shell pybind11-config --includes)
+PYBINDFLAGS = -Wall -shared -std=c++17 -fPIC $(PYBIND_INCLUDES)
+
+# GCC 12 produces false-positive array-bounds warnings in some code (see
+# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115824). Pybind 3.x automatically
+# disables them (see https://github.com/pybind/pybind11/pull/5355/files). We're
+# still using 2.x, so we get the warnings unless we disable them ourselves.
+# TODO(mhucka): remove this once we can upgrade to Pybind11 version 3.x.
+GCC_MAJOR_VERSION := $(firstword $(subst ., ,$(shell gcc -dumpversion)))
+ifeq ($(GCC_MAJOR_VERSION), 12)
+    PYBINDFLAGS += -Wno-array-bounds -Wno-stringop-overread
+endif
 
 # The flags for the compilation of the simd-specific Pybind11 interfaces
-PYBINDFLAGS_BASIC = -Wall -shared -std=c++17 -fPIC `python3 -m pybind11 --includes`
-PYBINDFLAGS_SSE = -msse4.1 -Wall -shared -std=c++17 -fPIC `python3 -m pybind11 --includes`
-PYBINDFLAGS_AVX2 = -mavx2 -mfma -Wall -shared -std=c++17 -fPIC `python3 -m pybind11 --includes`
-PYBINDFLAGS_AVX512 = -mavx512f -mbmi2 -Wall -shared -std=c++17 -fPIC `python3 -m pybind11 --includes`
+PYBINDFLAGS_BASIC = $(PYBINDFLAGS)
+PYBINDFLAGS_SSE = -msse4 $(PYBINDFLAGS)
+PYBINDFLAGS_AVX2 = -mavx2 -mfma $(PYBINDFLAGS)
+PYBINDFLAGS_AVX512 = -mavx512f -mbmi2 $(PYBINDFLAGS)
 
-# The flags for the compilation of GPU-specific Pybind11 interfaces
-PYBINDFLAGS_CUDA = -std=c++14 -x cu -Xcompiler "-Wall -shared -fPIC `python3 -m pybind11 --includes`"
+# The flags for the compilation of CUDA-specific Pybind11 interfaces
+PYBINDFLAGS_CUDA = -std=c++17 -x cu -Xcompiler "-Wall -shared -fPIC $(PYBIND_INCLUDES)"
 
 # The flags for the compilation of cuStateVec-specific Pybind11 interfaces
 PYBINDFLAGS_CUSTATEVEC = $(CUSTATEVECFLAGS) $(PYBINDFLAGS_CUDA)
 
+# The flags for the compilation of HIP-specific Pybind11 interfaces
+PYBINDFLAGS_HIP = -std=c++17 -Wall -shared -fPIC $(PYBIND_INCLUDES)
+
 # Check for nvcc to decide compilation mode.
 ifeq ($(shell which $(NVCC)),)
+# Check for hipcc to decide compilation mode.
+ifeq ($(shell which $(HIPCC)),)
 pybind: pybind-cpu decide-cpu
 else
-# Check for the cuStateVec library.
-ifeq ($(CUQUANTUM_DIR),)
-pybind: pybind-cpu pybind-gpu decide-gpu
+pybind: pybind-hip decide-hip
+endif
 else
-pybind: pybind-cpu pybind-gpu pybind-custatevec decide-custatevec
+# Check for the cuStateVec library.
+ifeq ($(CUQUANTUM_ROOT),)
+pybind: pybind-cpu pybind-cuda decide-cuda
+else
+pybind: pybind-cpu pybind-cuda pybind-custatevec pybind-custatevecex decide-custatevec
 endif
 endif
 
@@ -40,23 +89,40 @@ pybind-cpu:
 
 .PHONY: decide-cpu
 decide-cpu:
+	echo "building decide-cpu"
 	$(CXX) decide/decide.cpp -o $(QSIMLIB_DECIDE) $(CXXFLAGS) $(PYBINDFLAGS_BASIC)
 
-.PHONY: pybind-gpu
-pybind-gpu:
+.PHONY: pybind-cuda
+pybind-cuda:
 	$(NVCC) cuda/pybind_main_cuda.cpp -o $(QSIMLIB_CUDA) $(NVCCFLAGS) $(PYBINDFLAGS_CUDA)
 
-.PHONY: decide-gpu
-decide-gpu:
+.PHONY: decide-cuda
+decide-cuda:
 	$(NVCC) decide/decide.cpp -o $(QSIMLIB_DECIDE) $(NVCCFLAGS) $(PYBINDFLAGS_CUDA)
 
 .PHONY: pybind-custatevec
 pybind-custatevec:
 	$(NVCC) custatevec/pybind_main_custatevec.cpp -o $(QSIMLIB_CUSTATEVEC) $(NVCCFLAGS) $(PYBINDFLAGS_CUSTATEVEC)
 
+.PHONY: pybind-custatevecex
+pybind-custatevecex:
+	$(NVCC) custatevecex/pybind_main_custatevecex.cpp -o $(QSIMLIB_CUSTATEVECEX) $(NVCCFLAGS) $(PYBINDFLAGS_CUSTATEVEC)
+
 .PHONY: decide-custatevec
 decide-custatevec:
-	$(NVCC) decide/decide.cpp -D__CUSTATEVEC__ -o $(QSIMLIB_DECIDE) $(NVCCFLAGS) $(PYBINDFLAGS_CUDA)
+	$(NVCC) decide/decide.cpp -D__CUSTATEVEC__ -D__CUSTATEVECEX__ -o $(QSIMLIB_DECIDE) $(NVCCFLAGS) $(PYBINDFLAGS_CUDA)
+
+.PHONY: pybind-hip
+pybind-hip:
+	$(HIPCC) basic/pybind_main_basic.cpp -o $(QSIMLIB_BASIC) $(CXXFLAGS) $(PYBINDFLAGS_BASIC)
+	$(HIPCC) sse/pybind_main_sse.cpp -o $(QSIMLIB_SSE) $(CXXFLAGS) $(PYBINDFLAGS_SSE)
+	$(HIPCC) avx2/pybind_main_avx2.cpp -o $(QSIMLIB_AVX2) $(CXXFLAGS) $(PYBINDFLAGS_AVX2)
+	$(HIPCC) avx512/pybind_main_avx512.cpp -o $(QSIMLIB_AVX512) $(CXXFLAGS) $(PYBINDFLAGS_AVX512)
+	$(HIPCC) hip/pybind_main_hip.cpp -o $(QSIMLIB_HIP) $(HIPCCFLAGS) $(PYBINDFLAGS_HIP)
+
+.PHONY: decide-hip
+decide-hip:
+	$(HIPCC) decide/decide.cpp -o $(QSIMLIB_DECIDE) $(HIPCCFLAGS) $(PYBINDFLAGS_HIP)
 
 .PHONY: clean
 clean:
@@ -65,5 +131,7 @@ clean:
 	-rm -f ./avx2/*.x ./avx2/*.a ./avx2/*.so ./avx2/*.mod $(QSIMLIB_AVX2)
 	-rm -f ./avx512/*.x ./avx512/*.a ./avx512/*.so ./avx512/*.mod $(QSIMLIB_AVX512)
 	-rm -f ./cuda/*.x ./cuda/*.a ./cuda/*.so ./cuda/*.mod $(QSIMLIB_CUDA)
+	-rm -f ./hip/*.x ./hip/*.a ./hip/*.so ./hip/*.mod $(QSIMLIB_HIP)
 	-rm -f ./custatevec/*.x ./custatevec/*.a ./custatevec/*.so ./custatevec/*.mod $(QSIMLIB_CUSTATEVEC)
+	-rm -f ./custatevecex/*.x ./custatevecex/*.a ./custatevecex/*.so ./custatevecex/*.mod $(QSIMLIB_CUSTATEVECEX)
 	-rm -f ./decide/*.x ./decide/*.a ./decide/*.so ./decide/*.mod $(QSIMLIB_DECIDE)

@@ -21,8 +21,8 @@ namespace py = pybind11;
 #include <intrin.h>
 #define cpuid(info, x)    __cpuidex(info, x, 0)
 
-#else
-//  GCC Intrinsics
+#elif defined(__x86_64__) || defined(__i386__)
+// GCC Intrinsics for x86/x86_64
 #include <cpuid.h>
 void cpuid(int info[4], int infoType){
     __cpuid_count(infoType, 0, info[0], info[1], info[2], info[3]);
@@ -34,10 +34,11 @@ enum Instructions { AVX512F = 0, AVX2 = 1, SSE4_1 = 2, BASIC = 3};
 
 int detect_instructions() {
   Instructions instr = BASIC;
+
+  #if !defined(__aarch64__) || !defined(__APPLE__)
+  // Existing x86/x86_64 specific instruction set detection logic
   int info[4];
-
   cpuid(info, 0);
-
   int nIds = info[0];
   if (nIds >= 1) {
     cpuid(info, 1);
@@ -47,20 +48,21 @@ int detect_instructions() {
   }
   if (nIds >= 7) {
     cpuid(info, 7);
-    if ((info[1] & (1 <<  5))!= 0) {
+    if ((info[1] & (1 << 5)) != 0) {
       instr = AVX2;
     }
     if ((info[1] & (1 << 16)) != 0) {
       instr = AVX512F;
     }
-
   }
+  #endif
 
   return static_cast<int>(instr);
 }
 
 enum GPUCapabilities {
-    CUDA = 0, CUSTATEVEC = 1, NO_GPU = 10, NO_CUSTATEVEC = 11 };
+    CUDA = 0, CUSTATEVEC = 1, CUSTATEVECEX = 2, HIP = 3, NO_GPU = 10,
+    NO_CUSTATEVEC = 11, NO_CUSTATEVECEX = 12 };
 
 // For now, GPU detection is performed at compile time, as our wheels are
 // generated on Github Actions runners which do not have GPU support.
@@ -70,6 +72,8 @@ enum GPUCapabilities {
 int detect_gpu() {
   #ifdef __NVCC__
   GPUCapabilities gpu = CUDA;
+  #elif __HIP__
+  GPUCapabilities gpu = HIP;
   #else
   GPUCapabilities gpu = NO_GPU;
   #endif
@@ -90,6 +94,20 @@ int detect_custatevec() {
   return gpu;
 }
 
+// For now, cuStateVecEx detection is performed at compile time, as our wheels
+// are generated on Github Actions runners which do not have GPU support.
+//
+// Users wishing to use qsim with cuStateVecEx will need to compile locally on
+// a device which has the necessary CUDA toolkit and cuStateVecEx library.
+int detect_custatevecex() {
+  #if defined(__NVCC__) && defined(__CUSTATEVECEX__)
+  GPUCapabilities gpu = CUSTATEVECEX;
+  #else
+  GPUCapabilities gpu = NO_CUSTATEVECEX;
+  #endif
+  return gpu;
+}
+
 PYBIND11_MODULE(qsim_decide, m) {
   m.doc() = "pybind11 plugin";  // optional module docstring
 
@@ -101,4 +119,7 @@ PYBIND11_MODULE(qsim_decide, m) {
 
   // Detect cuStateVec.
   m.def("detect_custatevec", &detect_custatevec, "Detect cuStateVec");
+
+  // Detect cuStateVecEx.
+  m.def("detect_custatevecex", &detect_custatevecex, "Detect cuStateVecEx");
 }

@@ -180,7 +180,7 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
    * @param gates The gates (or pointers to the gates) to be fused.
    *   Gate times of the gates that act on the same qubits should be ordered.
    *   Gates that are out of time order should not cross the time boundaries
-   *   set by `times_to_split_at` or by measurment gates.
+   *   set by `times_to_split_at` or by measurement gates.
    * @param times_to_split_at Ordered list of time steps (boundaries) at which
    *   to separate fused gates. Each element of the output will contain gates
    *   from a single 'window' in this list.
@@ -226,7 +226,7 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
    * @param gfirst, glast The iterator range [gfirst, glast) to fuse gates
    *   (or pointers to gates) in. Gate times of the gates that act on the same
    *   qubits should be ordered. Gates that are out of time order should not
-   *   cross the time boundaries set by `times_to_split_at` or by measurment
+   *   cross the time boundaries set by `times_to_split_at` or by measurement
    *   gates.
    * @param times_to_split_at Ordered list of time steps (boundaries) at which
    *   to separate fused gates. Each element of the output will contain gates
@@ -561,8 +561,6 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
   static void FuseOrphanedGates(unsigned max_fused_size, Stat& stat,
                                 std::vector<GateF*>& orphaned_gates,
                                 std::vector<GateFused>& fused_gates) {
-    unsigned count = 0;
-
     for (std::size_t i = 0; i < orphaned_gates.size(); ++i) {
       auto ogate1 = orphaned_gates[i];
 
@@ -574,8 +572,6 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
         auto ogate2 = orphaned_gates[j];
 
         if (ogate2->visited == kFinal) continue;
-
-        ++count;
 
         unsigned cur_size = ogate1->qubits.size() + ogate2->qubits.size();
 
@@ -1011,15 +1007,15 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
     if (verbosity < 3) return;
 
     if (stat.num_controlled_gates > 0) {
-      IO::messagef("%lu controlled gates\n", stat.num_controlled_gates);
+      IO::messagef("%u controlled gates\n", stat.num_controlled_gates);
     }
 
     if (stat.num_mea_gates > 0) {
-      IO::messagef("%lu measurement gates", stat.num_mea_gates);
+      IO::messagef("%u measurement gates", stat.num_mea_gates);
       if (stat.num_fused_mea_gates == stat.num_mea_gates) {
         IO::messagef("\n");
       } else {
-        IO::messagef(" are fused into %lu gates\n", stat.num_fused_mea_gates);
+        IO::messagef(" are fused into %u gates\n", stat.num_fused_mea_gates);
       }
     }
 
@@ -1035,7 +1031,7 @@ class MultiQubitGateFuser final : public Fuser<IO, Gate> {
       }
     }
 
-    IO::messagef(" gates are fused into %lu gates\n", stat.num_fused_gates);
+    IO::messagef(" gates are fused into %u gates\n", stat.num_fused_gates);
 
     if (verbosity < 5) return;
 

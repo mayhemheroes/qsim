@@ -17,11 +17,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cirq
-
 import numpy as np
 
-from . import qsim, qsim_gpu, qsim_custatevec
 import qsimcirq.qsim_circuit as qsimc
+
+from . import qsim, qsim_custatevec, qsim_custatevecex, qsim_gpu
 
 
 # This should probably live in Cirq...
@@ -60,13 +60,22 @@ class QSimOptions:
             simulation modes.
         use_gpu: whether to use GPU instead of CPU for simulation. The "gpu_*"
             arguments below are only considered if this is set to True.
-        gpu_mode: use CUDA if set to 0 (default value) or use the NVIDIA
-            cuStateVec library if set to any other value. The "gpu_*"
-            arguments below are only considered if this is set to 0.
+        gpu_mode: use CUDA if set to 0 (default value), use the NVIDIA
+            cuStateVec library if set to 1 or use the NVIDIA cuStateVecEx
+            library if set to any other value. The "gpu_*" arguments below are
+            only considered if this is set to 0. The "gpu_cusvex_*" arguments
+            below are only considered if this is set to 2 or greater.
         gpu_state_threads: number of threads per CUDA block to use for the GPU
             StateSpace. This must be a power of 2 in the range [32, 1024].
         gpu_data_blocks: number of data blocks to use for the GPU StateSpace.
             Below 16 data blocks, performance is noticeably reduced.
+        gpu_cusvex_log_buf_size: log2 of the transfer buffer size that is used
+            for MPI communication. Default value is 30, i.e. the buffer size is
+            2^30 bytes.
+        gpu_cusvex_network_type: Device network type for multi-device:
+            0=Switch (default), 1=FullMesh. Or layered network type for
+            multi-process: 0=SuperPOD (default), 1=GB200NVL, 2=SwitchTree,
+            3=Communicator.
         verbosity: Logging verbosity.
         denormals_are_zeros: if true, set flush-to-zero and denormals-are-zeros
             MXCSR control flags. This prevents rare cases of performance
@@ -80,6 +89,8 @@ class QSimOptions:
     gpu_mode: int = 0
     gpu_state_threads: int = 512
     gpu_data_blocks: int = 16
+    gpu_cusvex_log_buf_size: int = 30
+    gpu_cusvex_network_type: int = 0
     verbosity: int = 0
     denormals_are_zeros: bool = False
 
@@ -96,6 +107,8 @@ class QSimOptions:
             "gmode": self.gpu_mode,
             "gsst": self.gpu_state_threads,
             "gdb": self.gpu_data_blocks,
+            "glbuf": self.gpu_cusvex_log_buf_size,
+            "gnwt": self.gpu_cusvex_network_type,
             "v": self.verbosity,
             "z": self.denormals_are_zeros,
         }
@@ -180,16 +193,26 @@ class QSimSimulator(
                     )
                 else:
                     self._sim_module = qsim_gpu
-            else:
+            elif self.qsim_options["gmode"] == 1:
                 if qsim_custatevec is None:
                     raise ValueError(
                         "cuStateVec GPU execution requested, but not "
                         "supported. If your device has GPU support and the "
-                        "NVIDIA cuStateVec library is installed, you may need "
-                        "to compile qsim locally."
+                        "NVIDIA cuStateVec library is installed, you may "
+                        "need to compile qsim locally."
                     )
                 else:
                     self._sim_module = qsim_custatevec
+            else:
+                if qsim_custatevecex is None:
+                    raise ValueError(
+                        "cuStateVecEx GPU execution requested, but not "
+                        "supported. If your device has GPU support and the "
+                        "NVIDIA cuStateVecEx library is installed, you may "
+                        "need to compile qsim locally."
+                    )
+                else:
+                    self._sim_module = qsim_custatevecex
         else:
             self._sim_module = qsim
 
@@ -213,7 +236,7 @@ class QSimSimulator(
         """Run a simulation, mimicking quantum hardware.
 
         Args:
-            program: The circuit to simulate.
+            circuit: The circuit to simulate.
             param_resolver: Parameters to run with the program.
             repetitions: Number of times to repeat the run.
 
@@ -254,9 +277,11 @@ class QSimSimulator(
         # Add noise to the circuit if a noise model was provided.
         all_qubits = program.all_qubits()
         program = qsimc.QSimCircuit(
-            self.noise.noisy_moments(program, sorted(all_qubits))
-            if self.noise is not cirq.NO_NOISE
-            else program,
+            (
+                self.noise.noisy_moments(program, sorted(all_qubits))
+                if self.noise is not cirq.NO_NOISE
+                else program
+            ),
         )
 
         # Compute indices of measured qubits
@@ -320,9 +345,11 @@ class QSimSimulator(
             # Simply removing them may omit qubits from the circuit.
             for i in range(len(program.moments)):
                 program.moments[i] = cirq.Moment(
-                    op
-                    if not isinstance(op.gate, cirq.MeasurementGate)
-                    else [cirq.IdentityGate(1).on(q) for q in op.qubits]
+                    (
+                        op
+                        if not isinstance(op.gate, cirq.MeasurementGate)
+                        else [cirq.IdentityGate(1).on(q) for q in op.qubits]
+                    )
                     for op in program.moments[i]
                 )
             translator_fn_name = "translate_cirq_to_qsim"
@@ -386,13 +413,13 @@ class QSimSimulator(
         Args:
             program: The circuit to simulate.
             bitstrings: The bitstrings whose amplitudes are desired, input as an
-              string array where each string is formed from measured qubit values
-              according to `qubit_order` from most to least significant qubit,
-              i.e. in big-endian ordering.
-            param_resolver: Parameters to run with the program.
+                string array where each string is formed from measured qubit values
+                according to `qubit_order` from most to least significant qubit,
+                i.e., in big-endian ordering.
+            params: Parameters to run with the program.
             qubit_order: Determines the canonical ordering of the qubits. This is
-              often used in specifying the initial state, i.e. the ordering of the
-              computational basis states.
+                often used in specifying the initial state, i.e., the ordering of the
+                computational basis states.
 
         Yields:
             Amplitudes.
@@ -401,9 +428,11 @@ class QSimSimulator(
         # Add noise to the circuit if a noise model was provided.
         all_qubits = program.all_qubits()
         program = qsimc.QSimCircuit(
-            self.noise.noisy_moments(program, sorted(all_qubits))
-            if self.noise is not cirq.NO_NOISE
-            else program,
+            (
+                self.noise.noisy_moments(program, sorted(all_qubits))
+                if self.noise is not cirq.NO_NOISE
+                else program
+            ),
         )
 
         # qsim numbers qubits in reverse order from cirq
@@ -435,42 +464,13 @@ class QSimSimulator(
             options["s"] = self.get_seed()
             yield simulator_fn(options)
 
-    def simulate_sweep_iter(
+    def _simulate_impl(
         self,
         program: cirq.Circuit,
         params: cirq.Sweepable,
         qubit_order: cirq.QubitOrderOrList = cirq.QubitOrder.DEFAULT,
         initial_state: Optional[Union[int, np.ndarray]] = None,
-    ) -> Iterator[cirq.StateVectorTrialResult]:
-        """Simulates the supplied Circuit.
-
-        This method returns a result which allows access to the entire
-        wave function. In contrast to simulate, this allows for sweeping
-        over different parameter values.
-
-        Avoid using this method with `use_gpu=True` in the simulator options;
-        when used with GPU this method must copy state from device to host memory
-        multiple times, which can be very slow. This issue is not present in
-        `simulate_expectation_values_sweep`.
-
-        Args:
-            program: The circuit to simulate.
-            params: Parameters to run with the program.
-            qubit_order: Determines the canonical ordering of the qubits. This is
-              often used in specifying the initial state, i.e. the ordering of the
-              computational basis states.
-            initial_state: The initial state for the simulation. This can either
-              be an integer representing a pure state (e.g. 11010) or a numpy
-              array containing the full state vector. If none is provided, this
-              is assumed to be the all-zeros state.
-
-        Returns:
-            List of SimulationTrialResults for this run, one for each
-            possible parameter resolver.
-
-        Raises:
-            TypeError: if an invalid initial_state is provided.
-        """
+    ) -> Iterator[Tuple[cirq.ParamResolver, np.ndarray, Sequence[int]]]:
         if initial_state is None:
             initial_state = 0
         if not isinstance(initial_state, (int, np.ndarray)):
@@ -479,9 +479,11 @@ class QSimSimulator(
         # Add noise to the circuit if a noise model was provided.
         all_qubits = program.all_qubits()
         program = qsimc.QSimCircuit(
-            self.noise.noisy_moments(program, sorted(all_qubits))
-            if self.noise is not cirq.NO_NOISE
-            else program,
+            (
+                self.noise.noisy_moments(program, sorted(all_qubits))
+                if self.noise is not cirq.NO_NOISE
+                else program
+            ),
         )
 
         options = {}
@@ -494,11 +496,11 @@ class QSimSimulator(
         num_qubits = len(qsim_order)
         if isinstance(initial_state, np.ndarray):
             if initial_state.dtype != np.complex64:
-                raise TypeError(f"initial_state vector must have dtype np.complex64.")
+                raise TypeError("initial_state vector must have dtype np.complex64.")
             input_vector = initial_state.view(np.float32)
             if len(input_vector) != 2**num_qubits * 2:
                 raise ValueError(
-                    f"initial_state vector size must match number of qubits."
+                    "initial_state vector size must match number of qubits. "
                     f"Expected: {2**num_qubits * 2} Received: {len(input_vector)}"
                 )
 
@@ -523,11 +525,73 @@ class QSimSimulator(
                 qsim_state = fullstate_simulator_fn(options, initial_state)
             elif isinstance(initial_state, np.ndarray):
                 qsim_state = fullstate_simulator_fn(options, input_vector)
-            assert qsim_state.dtype == np.float32
-            assert qsim_state.ndim == 1
+            if qsim_state.dtype != np.float32:
+                raise TypeError("qsim_state must have dtype np.float32.")
+            if qsim_state.ndim != 1:
+                raise ValueError("qsim_state must be a 1D array.")
 
+            yield prs, qsim_state.view(np.complex64), cirq_order
+
+    def simulate_into_1d_array(
+        self,
+        program: cirq.AbstractCircuit,
+        param_resolver: cirq.ParamResolverOrSimilarType = None,
+        qubit_order: cirq.QubitOrderOrList = cirq.ops.QubitOrder.DEFAULT,
+        initial_state: Any = None,
+    ) -> Tuple[cirq.ParamResolver, np.ndarray, Sequence[int]]:
+        """Same as simulate() but returns raw simulation result without wrapping it.
+
+        The returned result is not wrapped in a StateVectorTrialResult but can be used
+        to create a StateVectorTrialResult.
+
+        Returns:
+            Tuple of (param resolver, final state, qubit order)
+        """
+        params = cirq.study.ParamResolver(param_resolver)
+        return next(self._simulate_impl(program, params, qubit_order, initial_state))
+
+    def simulate_sweep_iter(
+        self,
+        program: cirq.Circuit,
+        params: cirq.Sweepable,
+        qubit_order: cirq.QubitOrderOrList = cirq.QubitOrder.DEFAULT,
+        initial_state: Optional[Union[int, np.ndarray]] = None,
+    ) -> Iterator[cirq.StateVectorTrialResult]:
+        """Simulates the supplied Circuit.
+
+        This method returns a result which allows access to the entire
+        wave function. In contrast to simulate, this allows for sweeping
+        over different parameter values.
+
+        Avoid using this method with `use_gpu=True` in the simulator options;
+        when used with GPU this method must copy state from device to host memory
+        multiple times, which can be very slow. This issue is not present in
+        `simulate_expectation_values_sweep`.
+
+        Args:
+            program: The circuit to simulate.
+            params: Parameters to run with the program.
+            qubit_order: Determines the canonical ordering of the qubits. This is
+                often used in specifying the initial state, i.e., the ordering of the
+                computational basis states.
+            initial_state: The initial state for the simulation. This can either
+                be an integer representing a pure state (e.g. 11010) or a numpy
+                array containing the full state vector. If none is provided, this
+                is assumed to be the all-zeros state.
+
+        Returns:
+            Iterator over SimulationTrialResults for this run, one for each
+            possible parameter resolver.
+
+        Raises:
+            TypeError: if an invalid initial_state is provided.
+        """
+
+        for prs, state_vector, cirq_order in self._simulate_impl(
+            program, params, qubit_order, initial_state
+        ):
             final_state = cirq.StateVectorSimulationState(
-                initial_state=qsim_state.view(np.complex64), qubits=cirq_order
+                initial_state=state_vector, qubits=cirq_order
             )
             # create result for this parameter
             # TODO: We need to support measurements.
@@ -556,7 +620,7 @@ class QSimSimulator(
             observables: An observable or list of observables.
             params: Parameters to run with the program.
             qubit_order: Determines the canonical ordering of the qubits. This
-                is often used in specifying the initial state, i.e. the
+                is often used in specifying the initial state, i.e., the
                 ordering of the computational basis states.
             initial_state: The initial state for the simulation. The form of
                 this state depends on the simulation implementation. See
@@ -612,9 +676,11 @@ class QSimSimulator(
 
         # Add noise to the circuit if a noise model was provided.
         program = qsimc.QSimCircuit(
-            self.noise.noisy_moments(program, sorted(all_qubits))
-            if self.noise is not cirq.NO_NOISE
-            else program,
+            (
+                self.noise.noisy_moments(program, sorted(all_qubits))
+                if self.noise is not cirq.NO_NOISE
+                else program
+            ),
         )
 
         options = {}
@@ -623,11 +689,11 @@ class QSimSimulator(
         param_resolvers = cirq.to_resolvers(params)
         if isinstance(initial_state, np.ndarray):
             if initial_state.dtype != np.complex64:
-                raise TypeError(f"initial_state vector must have dtype np.complex64.")
+                raise TypeError("initial_state vector must have dtype np.complex64.")
             input_vector = initial_state.view(np.float32)
             if len(input_vector) != 2**num_qubits * 2:
                 raise ValueError(
-                    f"initial_state vector size must match number of qubits."
+                    "initial_state vector size must match number of qubits. "
                     f"Expected: {2**num_qubits * 2} Received: {len(input_vector)}"
                 )
 
@@ -675,7 +741,7 @@ class QSimSimulator(
                 or observable list to calculate after ALL moments.
             param_resolver: Parameters to run with the program.
             qubit_order: Determines the canonical ordering of the qubits. This
-                is often used in specifying the initial state, i.e. the
+                is often used in specifying the initial state, i.e., the
                 ordering of the computational basis states.
             initial_state: The initial state for the simulation. The form of
                 this state depends on the simulation implementation. See
@@ -743,9 +809,11 @@ class QSimSimulator(
 
         # Add noise to the circuit if a noise model was provided.
         program = qsimc.QSimCircuit(
-            self.noise.noisy_moments(program, sorted(all_qubits))
-            if self.noise is not cirq.NO_NOISE
-            else program,
+            (
+                self.noise.noisy_moments(program, sorted(all_qubits))
+                if self.noise is not cirq.NO_NOISE
+                else program
+            ),
         )
 
         options = {}
@@ -754,11 +822,11 @@ class QSimSimulator(
         param_resolver = cirq.to_resolvers(param_resolver)
         if isinstance(initial_state, np.ndarray):
             if initial_state.dtype != np.complex64:
-                raise TypeError(f"initial_state vector must have dtype np.complex64.")
+                raise TypeError("initial_state vector must have dtype np.complex64.")
             input_vector = initial_state.view(np.float32)
             if len(input_vector) != 2**num_qubits * 2:
                 raise ValueError(
-                    f"initial_state vector size must match number of qubits."
+                    "initial_state vector size must match number of qubits. "
                     f"Expected: {2**num_qubits * 2} Received: {len(input_vector)}"
                 )
 

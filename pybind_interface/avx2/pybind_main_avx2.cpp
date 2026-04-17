@@ -15,6 +15,10 @@
 #include "pybind_main_avx2.h"
 
 #include "../../lib/formux.h"
+#include "../../lib/fuser_mqubit.h"
+#include "../../lib/gates_cirq.h"
+#include "../../lib/io.h"
+#include "../../lib/run_qsim.h"
 #include "../../lib/simulator_avx.h"
 #include "../../lib/util_cpu.h"
 
@@ -23,15 +27,20 @@ namespace qsim {
   using Simulator = SimulatorAVX<For>;
 
   struct Factory {
-    // num_state_threads and num_dblocks are unused, but kept for consistency
-    // with the GPU Factory.
-    Factory(
-      unsigned num_sim_threads,
-      unsigned num_state_threads,
-      unsigned num_dblocks) : num_threads(num_sim_threads) {}
+    explicit Factory(const py::dict& options) {
+      num_threads = ParseOptions<unsigned>(options, "t\0");
+    }
 
     using Simulator = qsim::Simulator<For>;
     using StateSpace = Simulator::StateSpace;
+
+    using Gate = Cirq::GateCirq<float>;
+    using Runner = QSimRunner<IO, MultiQubitGateFuser<IO, Gate>, Factory>;
+    using RunnerQT =
+        QSimRunner<IO, MultiQubitGateFuser<IO, const Gate*>, Factory>;
+    using RunnerParameter = Runner::Parameter;
+    using NoisyRunner = qsim::QuantumTrajectorySimulator<IO, Gate, RunnerQT>;
+    using NoisyRunnerParameter = NoisyRunner::Parameter;
 
     StateSpace CreateStateSpace() const {
       return StateSpace(num_threads);

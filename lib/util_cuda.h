@@ -15,9 +15,14 @@
 #ifndef UTIL_CUDA_H_
 #define UTIL_CUDA_H_
 
-#include <cuda.h>
+#ifdef __NVCC__
+  #include <cuda.h>
+#elif __HIP__
+  #include <hip/hip_runtime.h>
+#endif
 
 #include <cstdlib>
+#include <type_traits>
 
 #include "io.h"
 
@@ -27,9 +32,25 @@ namespace qsim {
 
 inline void ErrorAssert(cudaError_t code, const char* file, unsigned line) {
   if (code != cudaSuccess) {
-    IO::errorf("CUDA error: %s %s %d\n", cudaGetErrorString(code), file, line);
+    IO::errorf(
+        "CUDA error: %s at %s %d\n", cudaGetErrorString(code), file, line);
     exit(code);
   }
+}
+
+template <typename T>
+inline auto GetCudaType() {
+  if (std::is_same_v<T, float>) {
+    return CUDA_R_32F;
+  } else if (std::is_same_v<T, double>) {
+    return CUDA_R_64F;
+  } else if (std::is_same_v<T, std::complex<float>>) {
+    return CUDA_C_32F;
+  } else if (std::is_same_v<T, std::complex<double>>) {
+    return CUDA_C_64F;
+  }
+
+  return CUDA_C_64F;
 }
 
 template <typename T>
@@ -107,6 +128,25 @@ __device__ __forceinline__ FP1 WarpReduce(FP1 val, Op op) {
   }
 
   return val;
+}
+
+__device__ __forceinline__ uint64_t GetBlockId() {
+  return (uint64_t{blockIdx.z} * gridDim.y + uint64_t{blockIdx.y})
+         * gridDim.x + blockIdx.x;
+}
+
+inline dim3 CreateGrid(uint64_t blocks) {
+  if (blocks <= 65536) {
+    return dim3((uint32_t) blocks);
+  }
+  uint32_t x = 65536;
+  uint64_t rem = blocks / x;
+  if (rem <= 32768) {
+    return dim3(x, (uint32_t) rem);
+  }
+  uint32_t y = 32768;
+  uint32_t z = (uint32_t) (rem / y);
+  return dim3(x, y, z);
 }
 
 template <typename FP1, typename Op, unsigned warp_size = 32>

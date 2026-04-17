@@ -15,11 +15,8 @@
 """Tool to generate external api_docs for qsim shameless copy from TFQ."""
 import os
 
-from absl import app
-from absl import flags
-from tensorflow_docs.api_generator import doc_controls
-from tensorflow_docs.api_generator import generate_lib
-from tensorflow_docs.api_generator import public_api
+from absl import app, flags
+from tensorflow_docs.api_generator import generate_lib, public_api
 
 import qsimcirq as qs
 
@@ -27,7 +24,7 @@ flags.DEFINE_string("output_dir", "/tmp/qsim_api", "Where to output the docs")
 
 flags.DEFINE_string(
     "code_url_prefix",
-    ("https://github.com/quantumlib/qsim/tree/master/" "qsimcirq"),
+    ("https://github.com/quantumlib/qsim/tree/main/" "qsimcirq"),
     "The url prefix for links to code.",
 )
 
