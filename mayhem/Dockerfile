@@ -1,6 +1,6 @@
 FROM debian:bookworm AS builder
 
-RUN apt-get update && apt-get install -y g++ make wget clang curl
+RUN apt-get update && apt-get install -y g++ make wget clang curl python3 python3-numpy
 
 RUN wget -q https://github.com/bazelbuild/bazel/releases/download/6.5.0/bazel-6.5.0-linux-x86_64 -O /usr/local/bin/bazel && \
     chmod +x /usr/local/bin/bazel
