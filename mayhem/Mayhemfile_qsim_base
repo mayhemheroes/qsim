@@ -1,0 +1,9 @@
+project: qsim
+target: qsim-base
+testsuite:
+  - https://$MAYHEM_DOMAIN/$MAYHEM_PROJECT/$MAYHEM_TARGET/testsuite.tar
+  - file://mayhem/qsim-base/testsuite
+cmds:
+  - cmd: /mayhem/qsim_base -c @@
+    env:
+      DISABLE_SMOKETEST: '1'
